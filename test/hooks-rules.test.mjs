@@ -100,16 +100,28 @@ test('the operator journal hook signs what it keeps, keeps no whole message, mas
   const line = JSON.parse(raw.trim());
   // Beside other lines, the waiver line waives nothing (review of PR #160); kept apart, masked, with why, never the other lines.
   assert.deepEqual(line.waivers, []);
-  assert.deepEqual(line.ignored.map(i => i.line), ['dérogation relecture 0123456789ab : urgence validée, clé [masqué]']);
+  // The head only (rule and commit): the reason may hold a secret and the kept line must not look like a waiver.
+  assert.deepEqual(line.ignored.map(i => i.line), ['dérogation relecture 0123456789ab']);
+  assert.equal(line.v, 3);
   assert.match(line.ignored[0].why, /le message contenait aussi 1 autre\(s\) ligne\(s\)/);
   assert.deepEqual(line.preview, ['Je valide la maquette des articles.']);
   assert.equal((statSync(keyFile).mode & 0o777), 0o400);
-  const { setAnchorKeyFile, readOperatorMessages, anchoredQuote, journalState, readAnchorKey } = await import('../dist/rules/operator.js');
+  const { setAnchorKeyFile, readOperatorMessages, anchoredQuote, journalState, readAnchorKey, waiverFor } = await import('../dist/rules/operator.js');
   setAnchorKeyFile(keyFile);
   const common = join(root, '.git');
   const key = readAnchorKey(keyFile);
   assert.ok(anchoredQuote(readOperatorMessages(common), 'Je valide la maquette des articles', key), 'a whole sentence is recognised by its hash');
   assert.equal(anchoredQuote(readOperatorMessages(common), 'la maquette des articles', key), null, 'a piece of a sentence is not');
+  // End to end: a second prompt that carries the waiver line alone is signed by the hook, with its waiver line.
+  const alone = run(prompt('dérogation preuve 0123456789abcdef : urgence du lundi, production en panne', 'tty'));
+  assert.equal(alone.status, 0, alone.stderr);
+  const signed = readOperatorMessages(common);
+  assert.equal(signed.length, 2);
+  assert.deepEqual(signed[1].waivers, ['dérogation preuve 0123456789abcdef : urgence du lundi, production en panne']);
+  assert.equal(signed[1].ignored, undefined);
+  assert.ok(waiverFor(signed, 'preuve', '0123456789abcdef0123456789abcdef01234567'), 'read back as a waiver of that commit');
+  assert.equal(waiverFor(signed, 'preuve', 'fedcba9876543210fedcba9876543210fedcba98'), null, 'and of no other');
+  writeFileSync(journal, raw);
   // A line written without the key, or altered, is ignored.
   writeFileSync(journal, `${raw}${JSON.stringify({ ...line, waivers: ['dérogation preuve 0123456789ab : forgée par un agent'] })}\n`);
   assert.equal(readOperatorMessages(common).length, 1);

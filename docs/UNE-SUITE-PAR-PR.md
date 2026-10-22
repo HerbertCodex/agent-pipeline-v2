@@ -26,7 +26,7 @@ gain fragile, et une PR qui attendait sa propre suite avant de fusionner.
 - `apv gates run --stage full --fresh-copy` (appel incorrect désormais). La copie neuve de la mise en ligne reste, seule.
 - `stacks[].normalizeEnv` : le chargeur refuse la clé et dit « normalizeEnv retiré en alpha.6 : supprimer la clé ».
 - Le crédit de répétition (`repeat.credited`, `src/gates/repeat-credit.ts`) : sans suite de branche, aucun test n'a été répété avant.
-  Un reçu d'alpha.5 qui porte `repeat.credited` n'est plus lisible : il est ignoré et la suite se relance.
+  Un reçu d'alpha.5 qui porte `repeat.credited` est refusé : l'exécution entière « n'est pas un reçu valide » et la suite se relance.
 
 ## Ce qui reste
 
@@ -41,6 +41,18 @@ gain fragile, et une PR qui attendait sa propre suite avant de fusionner.
   partagé ; contrôles de la production gardés ; confirmation des migrations par l'opérateur ; fusion et mise en ligne sur ordre
   (`APV_ALLOW_MERGE=1`) ; une suite rouge n'est jamais relancée au même commit.
 
+## Deux limites à connaître (alpha.8)
+
+**PR empilées.** `apv release auto` lit la tête de `main` quand il commence et prouve **cet** arbre ; il ne change pas de cible
+en cours de suite, et ne tient pas de file d'attente. Si le cron passe entre les fusions de deux PR empilées, il prouve (et, vert,
+publie) l'arbre intermédiaire ; la passe suivante prend la nouvelle tête. Pour que l'intermédiaire ne soit jamais prouvé,
+fusionner les PR empilées dans **le même** `APV_ALLOW_MERGE=1 apv stack merge <pr1> <pr2>`.
+
+**Contrôle coupé en deux.** Les contrôles de la base (à la fusion) et ceux de la production (à la mise en ligne) sont toujours
+gardés : couper `browser` en `browser` et `browser-live` fait tourner aussi l'ancien `browser` entier, en plus des deux moitiés, tant
+que la base et la production portent l'ancienne définition. Mesure du projet pilote (20 octobre, 3 piles en parallèle) : 51 min,
+mémoire 21 Go sur 22, charge 44 ; surcoût payé une fois, par la PR de coupe, puis la nouvelle définition est celle de la base.
+
 ## 3. Un test instable sans rapport ne bloque plus la production
 
 Un contrôle réussi seulement après la relance de ses tests en échec (`passed_after_retry`) à la mise en ligne : chaque test relancé
@@ -49,17 +61,35 @@ est jugé. Il est **sans rapport** quand :
 - son nom donne son fichier (un chemin du commit, ou le seul fichier dont il est la fin : `a.spec.ts:12:5 › …`) ;
 - ce fichier n'est ni ajouté ni modifié depuis la production ;
 - il n'est pas dans la liste des tests concernés par le changement : la commande `affectedList` du contrôle, **lue à la
-  production**, lancée dans la copie neuve avec `{{baseSha}}` = la production (même calcul que `affected`, voir la partie 4 pour
-  des tests e2e) ; tout chemin du commit dans sa sortie compte.
+  production**, lancée avec `{{baseSha}}` = la production dans **une copie neuve du commit** (celle de `batch.setup`, faite
+  seulement quand un test instable est à juger, retirée ensuite), jamais dans la copie où la suite vient de tourner : ce que les
+  tests du changement y ont écrit n'y est pas (même calcul que `affected`, voir la partie 4 pour des tests e2e) ; tout chemin du
+  commit dans sa sortie compte ;
+- le changement depuis la production ne touche pas l'outillage de la commande (alpha.8) : `scripts/**`, `package.json`, les
+  verrous de dépendances, `.npmrc`, `.yarnrc*`, `.yarn/**`, `.pnpmfile.cjs`, `bunfig.toml`, `pnpm-workspace.yaml`, `tsconfig*.json`,
+  `jsconfig*.json`, `deno.json*`, `*.config.*`, `vitest.workspace.*`, `.mocharc*`, `.babelrc*`, `.swcrc`, `.gitattributes`, `.apv/**`,
+  `tests/support/**` et `test/support/**` (`TOOLING_PATHS`, qui reprend la liste des chemins générés `DEFAULT_GENERATED_PATHS`), ni un
+  chemin que la commande cite en clair. Le script de la liste vient du commit candidat : une PR qui le réécrit déciderait pour
+  elle-même. Règle de chemins seule, sans suivi des imports.
+
+La copie neuve du jugement est préparée par le `batch.setup` et l'environnement de la **production** (jamais ceux du candidat), à un
+chemin distinct de celui de la suite (`fresh/<arbre>-jugement`). Les copies laissées par une passe précédente, verrouillées par
+`git worktree lock` comprises, sont retirées au début de `apv release auto`.
 
 Alors la mise en ligne continue, et le test est écrit comme **constat** : sortie, journal (`stack.log`, champ `unstable` : contrôle,
 test, fichiers, « échoue 1 fois sur 2 passages », exécution) et suivi (`.apv/state/suivi-constats.md`, section « Tests instables à
 la mise en ligne »), pour une correction à part.
 
 Restent bloquants : un test ajouté ou modifié, ou concerné par le changement ; un nom sans fichier, un contrôle sans
-`affectedList` à la production (une PR ne s'en sert jamais pour elle-même), une liste en échec ; tout échec que la relance n'a pas
-guéri ; toute répétition en échec ; toute migration non confirmée (`release.migrations`) ; une preuve instable et incomplète
-(jamais relancée au même commit).
+`affectedList` à la production (une PR ne s'en sert jamais pour elle-même), une liste en échec ; un changement de l'outillage
+(ci-dessus ; dérogation de l'opérateur possible, 3.1) ; tout échec que la relance n'a pas guéri ; toute répétition en échec ; toute
+migration non confirmée (`release.migrations`) ; une preuve instable et incomplète (jamais relancée au même commit).
+
+**Ce que le jugement ne fait pas.** Il protège contre les **accidents** (un test ancien qui échoue au hasard à côté d'un
+changement sans rapport), pas contre une PR écrite pour le tromper. Lister les tests exécute du code du candidat (le chargement des
+fichiers de test par le lanceur, les imports des scripts hors des chemins d'outillage ci-dessus) : une PR malveillante peut donc
+faire oublier un test à la liste ; un processus laissé en marche par la suite peut aussi viser la copie du jugement. Les garde-fous qui restent : la relecture de sécurité à la fusion, la dérogation de l'opérateur
+(3.1) pour un cas bloqué, et le **constat écrit** pour chaque test instable publié (journal, suivi).
 
 Limite : `retryFailed.testPattern` doit nommer **chaque** test en échec de la première passe ; un test qu'il ne nomme pas n'est pas
 jugé. Relire le motif avec le format du rapporteur (Playwright `list` ou `line`).
@@ -158,7 +188,8 @@ une PR de dépendances, qui passe alors par le contrôle ci-dessus.
 `test/une-suite-par-pr.test.mjs` : deux PR fusionnées, une suite à la mise en ligne qui répète tous les tests modifiés (aucun
 crédit) ; une PR sans suite de branche publiée par `apv release auto` ; appels retirés (`--fresh-copy` refusé, `normalizeEnv` avec son
 message) ; jugement des tests instables (constat écrit ; refus : test concerné, `affectedList` absent à la production ou ajouté par le
-changement, nom sans fichier, test modifié, répétition 1 fois sur 5) ; migration en attente ; chargeur (`affectedList`) ; `pathsIn` ;
+changement, nom sans fichier, test modifié, répétition 1 fois sur 5) ; migration en attente ; chargeur (`affectedList`) ; `pathsIn` ; `toolingTouched` et
+refus quand le changement touche l'outillage de `affectedList`, copie neuve sans les fichiers écrits par la suite, cas du projet pilote ;
 contrôle d'audit conditionnel aux contrôles de tâche et à la mise en ligne. `test/release.test.mjs` : reprise au même environnement,
 relance dans un autre (variable nommée).
 

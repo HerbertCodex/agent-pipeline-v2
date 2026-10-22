@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
 import { configIssues } from '../dist/config/load.js';
-import { pathsIn } from '../dist/release/unstable.js';
+import { pathsIn, toolingTouched } from '../dist/release/unstable.js';
 
 /**
  * docs/UNE-SUITE-PAR-PR.md: a pull request merges on its task checks, targeted tests and reviews; the only full suite runs once,
@@ -167,6 +167,202 @@ test('AC-3, refusals: a test the change concerns (affectedList), a check without
   const r = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(r.code, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /ne déclare pas affectedList à la production/);
+});
+
+/** A browser check like `flakyGate`, whose `affectedList` is `list` (by default the script `scripts/affected-list.mjs` of the project). */
+function scriptedGate(dir, list = ['node', 'scripts/affected-list.mjs', '{{baseSha}}']) {
+  const { affectedList: _unused, ...gate } = flakyGate(dir, 'tests/old.spec.ts');
+  return { ...gate, affectedList: list };
+}
+const say = file => `console.log("Listing tests:\\n  [chromium] › tests/${file}.spec.ts:1:1 › x\\nTotal: 1 test in 1 file");`;
+const [HONEST, LIE] = [say('old'), say('other')];
+const NODE_LIST = ['node', 'scripts/affected-list.mjs', '{{baseSha}}'];
+
+test('toolingTouched: scripts, manifests, locks, settings, configuration files at any depth and the paths the command names; not the application', () => {
+  const tracked = ['src/lib/Comp.svelte', 'tests/a.spec.ts', 'docs/notes.md', 'tools/list.mjs'];
+  const touched = changed => toolingTouched(changed, ['node', 'tools/list.mjs', '{{baseSha}}'], tracked);
+  assert.deepEqual(touched(['src/lib/Comp.svelte', 'tests/a.spec.ts', 'docs/notes.md', 'supabase/migrations/1.sql', 'static/a.png']), []);
+  assert.deepEqual(touched(['tools/list.mjs']), ['tools/list.mjs'], 'a path the command names');
+  for (const f of ['scripts/x.mjs', 'apps/web/scripts/y/z.sh', 'package.json', 'apps/web/package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'npm-shrinkwrap.json',
+    '.npmrc', 'apps/web/.npmrc', '.yarnrc', '.yarnrc.yml', 'bunfig.toml', 'tsconfig.json', 'tsconfig.base.json', 'vite.config.ts', 'apps/web/playwright.config.ts', 'affected.config.json',
+    '.apv/config.json', 'jsconfig.json', 'deno.json', 'deno.jsonc', '.pnpmfile.cjs', '.yarn/releases/yarn.cjs', 'vitest.workspace.ts', '.mocharc.cjs', '.babelrc', '.swcrc',
+    'tests/support/projects.mjs', 'apps/web/test/support/a.ts', '.gitattributes']) {
+    assert.deepEqual(touched([f]), [f], f);
+  }
+});
+
+test('P1, pilot project: node scripts/e2e/affected-list.mjs, a component alone changes: the list is read in a fresh copy, an unrelated test is published', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'apv4-une-suite-flaky-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const list = ['node', 'scripts/e2e/affected-list.mjs', '{{baseSha}}'];
+  // A comment that mentions « import (GRAPH_CODE). » is nothing to the rule: no analysis of the script.
+  const script = (file) => `/**\n * Liste les tests concernés : le code qui n'agit que par\n * import (GRAPH_CODE).\n */\nimport { execFileSync } from 'node:child_process';\n${say(file)}\n`;
+  const files = file => ({ 'tests/old.spec.ts': 'old\n', 'src/lib/Comp.svelte': '<p>a</p>\n', 'scripts/e2e/affected-list.mjs': script(file) });
+  const unrelated = project(t, { gates: [scriptedGate(dir, list)], files: files('other') });
+  const sha = unrelated.commit('src/lib/Comp.svelte', '<p>b</p>\n'); git(unrelated.repo, 'push', '-q', 'origin', 'main');
+  const ok = await apv(unrelated.repo, ['release', 'auto'], ALLOW);
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+  assert.equal(unrelated.remote('production'), sha);
+  assert.match(ok.stdout, /Constat : test instable sans rapport avec le changement/);
+  // The same change when the script lists the unstable test: judged, concerned, refused.
+  const concerned = project(t, { gates: [scriptedGate(dir, list)], files: files('old') });
+  const before = concerned.remote('production');
+  concerned.commit('src/lib/Comp.svelte', '<p>b</p>\n'); git(concerned.repo, 'push', '-q', 'origin', 'main');
+  const no = await apv(concerned.repo, ['release', 'auto'], ALLOW);
+  assert.equal(no.code, 1, no.stdout + no.stderr);
+  assert.match(no.stdout, /concerné par le changement depuis la production \(affectedList/);
+  assert.equal(concerned.remote('production'), before);
+});
+
+/**
+ * Review of PR #162: what a script loads cannot be followed, so the judgment « sans rapport » is refused when the change touches
+ * the tooling (a path rule), and the list is read in a fresh copy of the commit, never in the copy where the suite ran (what the
+ * tests of the change wrote there is not the commit). The witness, a change of the application alone, is published (P1).
+ */
+test('F4, M1, M2: a change to the tooling is refused; what the suite writes in its own copy cannot act on the list', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'apv4-une-suite-flaky-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const lib = text => ({ 'scripts/lib/list.mjs': `export const list = () => { ${text} };\n` });
+  const PKG = { name: 'x', scripts: { 'e2e:changed': 'node scripts/affected-list.mjs' } };
+  const NPM_LIST = ['npm', 'run', 'e2e:changed', '--', '{{baseSha}}'];
+  // The suite writes UNTRACKED files (or rewrites a tracked one) in its copy, then the list is read: the fresh copy has none of them.
+  const UNIT = [{ id: 'unit', stage: 'full', command: ['node', 'tests/run.mjs'] }];
+  const writer = written => `import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'; import { dirname } from 'node:path';\n${Object.entries(written).map(([f, c]) =>
+    `mkdirSync(dirname(${JSON.stringify(f)}), { recursive: true }); writeFileSync(${JSON.stringify(f)}, ${JSON.stringify(c)}); chmodSync(${JSON.stringify(f)}, 0o755);`).join('\n')}\n`;
+  const TOOLING = /touche l'outillage de affectedList/;
+  const CONCERNED = /concerné par le changement depuis la production \(affectedList/;
+  const cases = [
+    // The change rewrites the tooling.
+    ['F4 script', { files: { 'scripts/affected-list.mjs': "import { list } from './lib/list.mjs'; list();\n", ...lib(HONEST) }, attack: { 'scripts/affected-list.mjs': `process.exit(0);\n` }, why: TOOLING }],
+    ['F4 local import', { files: { 'scripts/affected-list.mjs': "import { list } from './lib/list.mjs'; list();\n", ...lib(HONEST) }, attack: lib(LIE), why: TOOLING }],
+    ['A1 import() with a template', { files: { 'scripts/affected-list.mjs': 'const { list } = await import(`./lib/list.mjs`); list();\n', ...lib(HONEST) }, attack: lib(LIE), why: TOOLING }],
+    ['A9 computed path', { files: { 'scripts/affected-list.mjs': "const m = await import(new URL('./lib/' + 'list.mjs', import.meta.url)); m.list();\n", ...lib(HONEST) }, attack: lib(LIE), why: TOOLING }],
+    ['A2 npm script that calls another', { list: NPM_LIST, files: { 'package.json': { name: 'x', scripts: { 'e2e:changed': 'npm run e2e:core --', 'e2e:core': 'node scripts/affected-list.mjs' } }, 'scripts/affected-list.mjs': `${HONEST}\n` },
+      attack: { 'scripts/affected-list.mjs': `${LIE}\n` }, why: TOOLING }],
+    ['A3 npm run --silent', { list: ['npm', 'run', '--silent', 'e2e:changed', '--', '{{baseSha}}'], files: { 'package.json': PKG, 'scripts/affected-list.mjs': `${HONEST}\n` }, attack: { 'scripts/affected-list.mjs': `${LIE}\n` }, why: TOOLING }],
+    ['A3b npm test', { list: ['npm', 'test', '--', '{{baseSha}}'], files: { 'package.json': { name: 'x', scripts: { test: 'node scripts/affected-list.mjs' } }, 'scripts/affected-list.mjs': `${HONEST}\n` },
+      attack: { 'package.json': { name: 'x', scripts: { test: 'node -e 0' } } }, why: TOOLING }],
+    ['A4 shell script', { list: ['sh', 'scripts/affected.sh', '{{baseSha}}'], files: { 'scripts/affected.sh': 'node scripts/lib/list.mjs\n', ...lib(HONEST) }, attack: lib(LIE), why: TOOLING }],
+    ['A5 .npmrc', { list: NPM_LIST, files: { 'package.json': PKG, 'scripts/affected-list.mjs': `${HONEST}\n` },
+      attack: { '.npmrc': 'node-options=--require ./evil.cjs\n', 'evil.cjs': `${LIE} process.exit(0);\n` }, why: TOOLING }],
+    ['A8 # import of package.json', { files: { 'package.json': { name: 'x', imports: { '#list': './scripts/lib/list.mjs' } }, 'scripts/affected-list.mjs': "import { list } from '#list'; list();\n", ...lib(HONEST) }, attack: lib(LIE), why: TOOLING }],
+    ['A10 symbolic link', { files: { 'scripts/real.mjs': `${HONEST}\n` }, links: [['scripts/affected-list.mjs', 'real.mjs']], attack: { 'scripts/real.mjs': `${LIE}\n` }, why: TOOLING }],
+    ['A11 configuration file read by the script', { files: { 'scripts/affected-list.mjs': "import { readFileSync } from 'node:fs'; const c = JSON.parse(readFileSync('affected.config.json', 'utf8')); console.log(`Listing tests:\\n  [chromium] › ${c.prefix}old.spec.ts:1:1 › x`);\n", 'affected.config.json': '{"prefix":"tests/"}\n' },
+      attack: { 'affected.config.json': '{"prefix":"nowhere/"}\n' }, why: TOOLING }],
+    ['A12 static import', { files: { 'scripts/affected-list.mjs': "import { list } from './lib/list.mjs'; list();\n", ...lib(HONEST) }, attack: lib(LIE), why: TOOLING }],
+    ['D1 child_process runs a file the change rewrites', { files: { 'scripts/affected-list.mjs': "import { execFileSync } from 'node:child_process'; execFileSync(process.execPath, ['scripts/lib/list.mjs'], { stdio: 'inherit' });\n", 'scripts/lib/list.mjs': `${HONEST}\n` },
+      attack: { 'scripts/lib/list.mjs': `${LIE}\n` }, why: TOOLING }],
+    ['D2 createRequire with a computed path', { files: { 'scripts/affected-list.mjs': "import { createRequire } from 'node:module'; const load = createRequire(import.meta.url); load('./lib/' + 'list.cjs')();\n", 'scripts/lib/list.cjs': `module.exports = () => { ${HONEST} };\n` },
+      attack: { 'scripts/lib/list.cjs': `module.exports = () => { ${LIE} };\n` }, why: TOOLING }],
+    // The suite writes in its own copy: the list is read in another, where none of it exists, and stays honest.
+    ['A6 the suite rewrites the script', { extra: UNIT, files: { 'scripts/affected-list.mjs': `${HONEST}\n`, 'tests/run.mjs': '\n' },
+      attack: { 'tests/run.mjs': `import { writeFileSync } from 'node:fs'; writeFileSync('scripts/affected-list.mjs', ${JSON.stringify(LIE)});\n` }, why: CONCERNED }],
+    ['B1 node_modules/.bin/node shadow', { list: NPM_LIST, extra: UNIT, files: { 'package.json': PKG, 'scripts/affected-list.mjs': `${HONEST}\n`, 'tests/run.mjs': '\n' },
+      attack: { 'tests/run.mjs': writer({ 'node_modules/.bin/node': '#!/bin/sh\necho "Listing tests:"; echo "  [chromium] › tests/other.spec.ts:1:1 › x"\n' }) }, why: CONCERNED }],
+    ['B2 untracked .npmrc', { list: NPM_LIST, extra: UNIT, files: { 'package.json': PKG, 'scripts/affected-list.mjs': `${HONEST}\n`, 'tests/run.mjs': '\n' },
+      attack: { 'tests/run.mjs': writer({ '.npmrc': 'node-options=--require ./evil.cjs\n', 'evil.cjs': `${LIE} process.exit(0);\n` }) }, why: CONCERNED }],
+    ['B3 list.js created before list/index.js', { list: ['node', 'scripts/affected-list.cjs', '{{baseSha}}'], extra: UNIT,
+      files: { 'scripts/affected-list.cjs': "require('./lib/list')();\n", 'scripts/lib/list/index.js': `module.exports = () => { ${HONEST} };\n`, 'tests/run.mjs': '\n' },
+      attack: { 'tests/run.mjs': writer({ 'scripts/lib/list.js': `module.exports = () => { ${LIE} };\n` }) }, why: CONCERNED }],
+    ['B4 package.json main created in a module folder', { list: ['node', 'scripts/affected-list.cjs', '{{baseSha}}'], extra: UNIT,
+      files: { 'scripts/affected-list.cjs': "require('./lib/list')();\n", 'scripts/lib/list/index.js': `module.exports = () => { ${HONEST} };\n`, 'tests/run.mjs': '\n' },
+      attack: { 'tests/run.mjs': writer({ 'scripts/lib/list/package.json': '{"main":"evil.js"}', 'scripts/lib/list/evil.js': `module.exports = () => { ${LIE} };\n` }) }, why: CONCERNED }],
+    // In the fresh copy the import of list.js finds only list.ts: the list fails, which blocks as well.
+    ['B5 list.js created beside list.ts', { extra: UNIT, files: { 'scripts/affected-list.mjs': "import { list } from './lib/list.js'; list();\n", 'scripts/lib/list.ts': `export const list = () => { ${HONEST} };\n`, 'tests/run.mjs': '\n' },
+      attack: { 'tests/run.mjs': writer({ 'scripts/lib/list.js': `export const list = () => { ${LIE} };\n` }) }, why: /affectedList en échec/ }],
+  ];
+  for (const [name, { list = NODE_LIST, files, attack, why, extra = [], links = [] }] of cases) {
+    const p = project(t, { gates: [scriptedGate(dir, list), ...extra], files: { 'tests/old.spec.ts': 'old\n', 'src/x.js': 'x\n', ...files } });
+    for (const [link, target] of links) { rmSync(join(p.repo, link), { force: true }); symlinkSync(target, join(p.repo, link)); }
+    if (links.length) { git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'liens'); git(p.repo, 'push', '-q', 'origin', 'main'); git(p.repo, 'push', '-q', 'origin', 'main:production', '--force'); }
+    const before = p.remote('production');
+    put(p.repo, 'src/x.js', 'x2\n');
+    for (const [path, text] of Object.entries(attack)) put(p.repo, path, text);
+    git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'attaque'); git(p.repo, 'push', '-q', 'origin', 'main');
+    const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+    assert.equal(r.code, 1, `${name}\n${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, why, name);
+    assert.equal(p.remote('production'), before, name);
+    assert.equal(existsSync(join(p.repo, '.apv', 'state', 'suivi-constats.md')), false, `${name}: no finding, it blocks`);
+  }
+  // The witness: only the application changes, the command and its script are untouched: judged, unrelated, published.
+  const w = project(t, { gates: [scriptedGate(dir)], files: { 'tests/old.spec.ts': 'old\n', 'src/x.js': 'x\n', 'scripts/affected-list.mjs': `${LIE}\n` } });
+  const sha = w.commit('src/x.js', 'x2\n'); git(w.repo, 'push', '-q', 'origin', 'main');
+  const ok = await apv(w.repo, ['release', 'auto'], ALLOW);
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+  assert.equal(w.remote('production'), sha);
+});
+
+/** A setup that appends `label cwd` to `log`: what prepares a copy, and where. */
+const labelled = (log, label) => node(`require("fs").appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(label)} + " " + process.cwd() + "\\n")`);
+
+test('M3, M4: the copy of the judgment is prepared by the setup of production, never of the candidate, and is not the copy of the suite', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'apv4-une-suite-flaky-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = join(dir, 'setups.log');
+  const p = project(t, { gates: [scriptedGate(dir, ['node', 'scripts/affected-list.mjs', '{{baseSha}}'])], extra: { batch: { setup: labelled(log, 'production') } },
+    files: { 'tests/old.spec.ts': 'old\n', 'src/x.js': 'x\n', 'scripts/affected-list.mjs': `${say('other')}\n` } });
+  // The candidate declares its own setup (and changes the code): the judgment must not run it.
+  const config = JSON.parse(readFileSync(join(p.repo, '.apv', 'config.json'), 'utf8'));
+  put(p.repo, '.apv/config.json', { ...config, batch: { setup: labelled(log, 'candidat') } });
+  p.commit('src/x.js', 'x2\n'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  const lines = readFileSync(log, 'utf8').trim().split('\n').map(l => l.split(' '));
+  assert.ok(lines.length >= 2, `${r.stdout}${r.stderr}\n${lines.join('\n')}`);
+  const [last] = lines.slice(-1);
+  assert.equal(last[0], 'production', 'the last copy prepared, the one of the judgment, ran the setup of production');
+  assert.deepEqual(lines.filter(l => l[0] === 'production').length, 1, 'once');
+  const suite = lines.find(l => l[0] === 'candidat');
+  assert.ok(suite, 'the suite, itself, ran the candidate (not the judgment)');
+  assert.notEqual(last[1], suite[1], 'the copy of the judgment is not the one of the suite');
+  assert.match(last[1], /-jugement$/);
+});
+
+test('F1: a copy left locked by an earlier pass (git worktree lock) is unlocked and removed at the start of apv release auto', async t => {
+  const p = project(t);
+  const common = join(p.repo, '.git');
+  const stale = join(common, 'apv', 'fresh', 'abcdef0123456789');
+  mkdirSync(dirname(stale), { recursive: true });
+  git(p.repo, 'worktree', 'add', '-q', '--detach', stale, 'HEAD');
+  git(p.repo, 'worktree', 'lock', stale);
+  assert.match(git(p.repo, 'worktree', 'list', '--porcelain'), /abcdef0123456789/);
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(existsSync(stale), false, 'the directory is gone');
+  assert.doesNotMatch(git(p.repo, 'worktree', 'list', '--porcelain'), /abcdef0123456789/, 'and the entry of Git');
+});
+
+test('F1, link: a link in fresh/ to the worktree of an agent (registered, locked) is never followed; a real stale copy is still removed', async t => {
+  const p = project(t);
+  const common = join(p.repo, '.git');
+  const fresh = join(common, 'apv', 'fresh');
+  mkdirSync(fresh, { recursive: true });
+  const agent = join(p.root, 'agent-wt');
+  git(p.repo, 'worktree', 'add', '-q', '--detach', agent, 'HEAD');
+  writeFileSync(join(agent, 'wip.txt'), 'travail non commité\n');
+  git(p.repo, 'worktree', 'lock', agent);
+  const data = join(p.root, 'donnees'); mkdirSync(data); writeFileSync(join(data, 'x.txt'), 'x\n');
+  symlinkSync(agent, join(fresh, 'lien-agent')); symlinkSync(p.repo, join(fresh, 'lien-principal')); symlinkSync(data, join(fresh, 'lien-donnees'));
+  const stale = join(fresh, 'bbbbbbbbbbbbbbbb');
+  git(p.repo, 'worktree', 'add', '-q', '--detach', stale, 'HEAD'); git(p.repo, 'worktree', 'lock', stale);
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(readFileSync(join(agent, 'wip.txt'), 'utf8'), 'travail non commité\n', 'the work of the agent is intact');
+  assert.match(git(p.repo, 'worktree', 'list', '--porcelain'), /agent-wt/, 'and still registered');
+  assert.ok(existsSync(join(p.repo, 'README.md')) && existsSync(join(data, 'x.txt')), 'the main checkout and the data are intact');
+  assert.match(r.stderr, /lien-agent non touchée : lien symbolique/);
+  assert.equal(existsSync(stale), false, 'the real stale copy is removed');
+  git(p.repo, 'worktree', 'unlock', agent);
+});
+
+test('the paths named by batch.setup (read at production) are tooling too: a change to them is refused', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'apv4-une-suite-flaky-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const p = project(t, { gates: [scriptedGate(dir)], extra: { batch: { setup: [process.execPath, 'tools/prepare.mjs'] } },
+    files: { 'tests/old.spec.ts': 'old\n', 'src/x.js': 'x\n', 'tools/prepare.mjs': '\n', 'scripts/affected-list.mjs': `${say('other')}\n` } });
+  const before = p.remote('production');
+  put(p.repo, 'src/x.js', 'x2\n'); put(p.repo, 'tools/prepare.mjs', '// change\n');
+  git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'setup change'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /touche l'outillage de affectedList \(tools\/prepare\.mjs\)/);
+  assert.equal(p.remote('production'), before);
 });
 
 test('AC-4: a test modified by the pull request that is unstable blocks: relaunched in the suite, or failing in the repetition (1 time out of 5)', async t => {

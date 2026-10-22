@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
 import { ALL_CAPTURES, TEST_KEY, commonDirOf, notWaivers, operatorSays, plainWaivers, png, seedReview, waive } from './support/rules.mjs';
-import { waiverFor, anchoredQuote, journalEntry } from '../dist/rules/operator.js';
+import { waiverFor, anchoredQuote, journalEntry, VALIDATES } from '../dist/rules/operator.js';
 import { isScreen } from '../dist/rules/screens.js';
 import { runsCommand } from '../dist/rules/required.js';
 import { nearTimeout, busyReasons } from '../dist/gates/run.js';
@@ -665,6 +665,40 @@ test('waiver by domain: « dérogation relecture:<domaine> » lifts the rule for
   assert.equal(rule(waived.report, 'relecture').domains[0].status, 'waived');
   human = (await apv(q.repo, ['rules', 'check', '--commit', q.head, '--target', 'origin/main'])).stdout;
   assert.match(human, / {4}securite : dérogation sur la sécurité \(correctif urgent relu par l'opérateur\)/);
+});
+
+test('delta review of PR #160 (F2, F3): an ignored line keeps its head only; an entry v 2 waives nothing but still confirms a migration', async () => {
+  const { appendJournal, readOperatorMessages, sign, ignoredWaiver } = await import('../dist/rules/operator.js');
+  const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
+  const sha12 = sha.slice(0, 12);
+  // F2: « Non, pas de dérogation … : le mot de passe est hunter2 » keeps neither the reason nor the words before the head.
+  const refused = journalEntry(`Non, pas de dérogation instable ${sha12} : le mot de passe est hunter2`, { at: 't', session: 's' }, TEST_KEY);
+  assert.deepEqual(refused.waivers, []);
+  assert.deepEqual(refused.ignored.map(i => i.line), [`dérogation instable ${sha12}`]);
+  assert.ok(ignoredWaiver([refused], 'instable', sha), 'the refusal still says why');
+  assert.equal(waiverFor([refused], 'instable', sha), null, 'and the kept head waives nothing');
+  // L1 (review of PR #162): a sentence in the form of a waiver anchors nothing, and « dérogation » validates no mockup.
+  const quote = `Non, pas de dérogation instable ${sha12} : le mot de passe est hunter2`;
+  assert.equal(anchoredQuote([refused], quote, TEST_KEY), null, 'the refused waiver is no anchor');
+  const plain = `dérogation instable ${sha12} : test ancien sans rapport`;
+  assert.equal(anchoredQuote([journalEntry(plain, { at: 't', session: 's' }, TEST_KEY)], plain, TEST_KEY), null, 'nor is a waiver');
+  assert.equal(VALIDATES.test('dérogation instable'), false);
+  assert.ok(anchoredQuote([journalEntry(`Je valide la maquette des articles. Dérogation instable ${sha12} : test ancien sans rapport`, { at: 't', session: 's' }, TEST_KEY)], 'Je valide la maquette des articles.', TEST_KEY), 'a validation beside it still anchors');
+  // F3: the same message signed by the previous hook (v 2) is read for its sentences, never for its waiver lines.
+  const root = mkdtempSync(join(tmpdir(), 'apv4-journal-v2-'));
+  try {
+    const current = journalEntry(`dérogation instable ${sha12} : test ancien sans rapport`, { at: new Date().toISOString(), session: 's' }, TEST_KEY);
+    assert.equal(current.v, 3);
+    const { sig: _sig, ...rest } = journalEntry('migration 20261022120000 appliquée', { at: new Date().toISOString(), session: 's' }, TEST_KEY);
+    const old = { ...rest, v: 2, waivers: [`dérogation instable ${sha12} : forgée par l'ancien crochet`] };
+    appendJournal(root, current); appendJournal(root, { ...old, sig: sign(TEST_KEY, 'operator', JSON.stringify(old)) });
+    const messages = readOperatorMessages(root, TEST_KEY);
+    assert.equal(messages.length, 2, 'both signed entries are read');
+    assert.deepEqual(messages[1].waivers, [], 'the waiver lines of a v 2 entry count for nothing');
+    assert.ok(anchoredQuote(messages, 'migration 20261022120000 appliquée', TEST_KEY), 'its migration confirmation is still read');
+    assert.equal(waiverFor(messages.slice(1), 'instable', sha), null);
+    assert.ok(waiverFor(messages, 'instable', sha), 'the current entry waives');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('waiver by domain: the journal keeps the line with its domain, never an unknown domain', () => {

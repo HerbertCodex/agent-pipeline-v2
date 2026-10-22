@@ -389,7 +389,7 @@ export function sentences(text: string): string[] {
 /** Shortest quote that can anchor a validation: « ok » or « oui » alone never does. */
 export const MIN_QUOTE = 12;
 /** Words that make a sentence a validation, whose first words are kept for the reader. */
-export const VALIDATES = /valid|approuv|accord|d[ée]rogation|go pour|on part/i;
+export const VALIDATES = /valid|approuv|accord|go pour|on part/i;
 /** Shortest prefix of the commit a waiver must name. */
 export const WAIVER_SHA = 12;
 /** Shortest reason after the commit, in characters. */
@@ -406,7 +406,7 @@ export type WaiverTarget = MergeRule | `relecture:${ReviewDomainName}`;
 
 /** One line of the journal: hashes, a few words, waiver lines; never the whole message. */
 export interface JournalEntry {
-  v: 2;
+  v: 3;
   at: string;
   session: string;
   /** HMAC (anchor key) of each comparable sentence of the message. */
@@ -424,13 +424,15 @@ export interface JournalEntry {
 }
 export interface IgnoredWaiver { line: string; why: string }
 export type OperatorMessage = Omit<JournalEntry, 'sig' | 'v'>;
+/** The version of the entries whose waiver lines count: v 2 was signed by a hook that judged them by the older rules (PR #162, F3). */
+const WAIVER_ENTRY_VERSION = 3;
 
 /** The words of a waiver anywhere in a line: what a refusal, a question or a quote of one contains. */
 const WAIVER_WORDS = new RegExp(`d[ée]rogation\\s+[a-z]+(?::[a-z]+)?\\s+(?:pour\\s+)?[0-9a-f]{${WAIVER_SHA},64}`, 'i');
 /** A waiver line whole: « dérogation <règle> [pour] <commit> : <raison> », nothing before nor after. */
 const WAIVER_FORM = new RegExp(`${WAIVER_LINE.source}\\s*:\\s*(.+)$`, 'i');
 /** A confirmation of migration alone on its line (src/release/migrations.ts), compared without typography. */
-const MIGRATION_LINE = /^migration \S+ appliqu[ée]e[.!]?$/;
+const MIGRATION_LINE = /^migration (?!(?:non|pas|jamais) )\S+ appliqu[ée]e[.!]?$/;
 /** What, in a line with the words of a waiver, keeps it from being one; null: a waiver line. */
 function waiverLineProblem(raw: string): string | null {
   if (!WAIVER_LINE.test(raw)) return 'la phrase n\'ouvre pas la ligne (refus, question ou citation)';
@@ -439,16 +441,21 @@ function waiverLineProblem(raw: string): string | null {
   const m = WAIVER_FORM.exec(raw.normalize('NFC').trim());
   if (!m) return 'forme non reconnue (« dérogation <règle> <commit> : <raison> » attendue, seule sur sa ligne)';
   if (UNASSERTED_REASON.test(m[1]!)) return 'raison avec « ? » ou des guillemets';
+  // The words of a waiver in the reason: « … Non, finalement pas de dérogation » on the same line (security review of #160, delta).
+  if (/d[ée]rogation/i.test(m[1]!)) return 'raison avec le mot « dérogation » (rétractation, citation)';
+  // Line separators that a regular « . » does not stop at: a second « line » that the text does not show.
+  if (/[\u000B\u000C\u0085]/.test(raw)) return 'saut de ligne inhabituel (VT, FF ou NEL) dans la ligne';
   return null;
 }
 /**
  * A line kept in the journal, from the words of the waiver on (what precedes them is never kept): the rule and the commit as
  * typed (a full commit id looks like a secret to the mask), the rest masked.
  */
-function keptLine(raw: string): string {
+function keptLine(raw: string, headOnly = false): string {
   const line = raw.trim();
   const head = WAIVER_WORDS.exec(line)!;
-  return `${head[0]}${maskSecrets(line.slice(head.index + head[0].length))}`.slice(0, 500);
+  // An ignored line keeps its head only: the reason may hold a secret, and a line shaped like a waiver could be read back as one.
+  return headOnly ? head[0] : `${head[0]}${maskSecrets(line.slice(head.index + head[0].length))}`.slice(0, 500);
 }
 
 /**
@@ -458,7 +465,8 @@ function keptLine(raw: string): string {
  * dérogation » waived the rule); otherwise each is kept apart, as ignored, with why.
  */
 export function journalEntry(text: string, meta: { at: string; session: string }, key: Buffer): JournalEntry | null {
-  const list = sentences(text);
+  // A sentence in the form of a waiver anchors nothing (a validation of mockup, a migration): ignored or old, it stays a quote of a waiver.
+  const list = sentences(text).filter(s => !WAIVER_WORDS.test(s));
   // A message of questions or quotes only is kept (its date), with no sentence that could anchor anything.
   if (!comparable(text).replace(EDGE, '')) return null;
   const preview = text.split(/\n+|(?<=[.!?…])\s+/).filter(s => VALIDATES.test(s) && !WAIVER_LINE.test(s)).map(s => maskSecrets(s.trim().split(/\s+/).slice(0, 8).join(' '))).slice(0, 10);
@@ -471,8 +479,8 @@ export function journalEntry(text: string, meta: { at: string; session: string }
   const odd = candidates.find(c => c.problem);
   const besides = others.length ? `le message contenait aussi ${others.length} autre(s) ligne(s) : une dérogation se tape seule dans son message (des confirmations de migration à part)`
     : `le message contenait aussi une ligne de dérogation non reconnue (${odd?.problem ?? '?'})`;
-  const ignored = whole ? [] : candidates.map(c => ({ line: keptLine(c.line), why: c.problem ?? besides })).slice(0, 20);
-  const body = { v: 2 as const, at: meta.at, session: meta.session.slice(0, 100), sentences: [...new Set(list.map(s => keyed(key, s)))].slice(0, 200), preview, waivers, ...(ignored.length ? { ignored } : {}) };
+  const ignored = whole ? [] : candidates.map(c => ({ line: keptLine(c.line, true), why: c.problem ?? besides })).slice(0, 20);
+  const body = { v: 3 as const, at: meta.at, session: meta.session.slice(0, 100), sentences: [...new Set(list.map(s => keyed(key, s)))].slice(0, 200), preview, waivers, ...(ignored.length ? { ignored } : {}) };
   return { ...body, sig: sign(key, 'operator', JSON.stringify(body)) };
 }
 
@@ -482,7 +490,7 @@ function verified(line: string, key: Buffer | null): JournalEntry | null {
   if (!key) return null;
   try {
     const value = JSON.parse(line) as Record<string, unknown>;
-    if (value['v'] !== 2 || typeof value['at'] !== 'string' || !Array.isArray(value['sentences']) || !Array.isArray(value['waivers']) || !Array.isArray(value['preview'])) return null;
+    if ((value['v'] !== 2 && value['v'] !== WAIVER_ENTRY_VERSION) || typeof value['at'] !== 'string' || !Array.isArray(value['sentences']) || !Array.isArray(value['waivers']) || !Array.isArray(value['preview'])) return null;
     const { sig, ...body } = value;
     return signatureValid(key, 'operator', JSON.stringify(body), sig) ? value as unknown as JournalEntry : null;
   } catch { return null; }
@@ -510,7 +518,8 @@ export function readOperatorMessages(common: string, key = anchorKey(common).key
   let raw: string;
   try { raw = readFileSync(operatorJournalPath(common), 'utf8'); } catch { return []; }
   return raw.split('\n').filter(l => l.trim()).map(l => verified(l, key)).filter((e): e is JournalEntry => e !== null)
-    .map(({ at, session, sentences: list, preview, waivers, ignored }) => ({ at, session, sentences: list, preview, waivers,
+    // The waiver lines of an older entry (v 2) count for nothing; its sentences (migrations confirmed) are still read.
+    .map(({ v, at, session, sentences: list, preview, waivers, ignored }) => ({ at, session, sentences: list, preview, waivers: v === WAIVER_ENTRY_VERSION ? waivers : [],
       ...(Array.isArray(ignored) ? { ignored: ignored.filter((i): i is IgnoredWaiver => typeof i?.line === 'string' && typeof i?.why === 'string') } : {}) }));
 }
 

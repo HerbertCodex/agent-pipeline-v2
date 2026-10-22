@@ -57,6 +57,10 @@ export const notWaivers = (rule, sha12) => [
   `Il dit de taper :\n    dérogation ${rule} ${sha12} : test ancien sans rapport\nPourquoi ?`,
   `    dérogation ${rule} ${sha12} : test ancien sans rapport`,
   `dérogation ${rule} ${sha12} : test ancien sans rapport\nNon, finalement pas de dérogation, corrige.`,
+  // Delta review of PR #160 (F1, infos): a retraction on the same line; NEL, VT and FF in the reason; « migration non appliquée » is no confirmation.
+  `dérogation ${rule} ${sha12} : test ancien sans rapport. Non, finalement pas de dérogation, corrige.`,
+  ...['\u0085', '\u000B', '\u000C'].map(c => `dérogation ${rule} ${sha12} : test ancien${c}sans rapport`),
+  `dérogation ${rule} ${sha12} : test ancien sans rapport\nmigration non appliquée`,
 ];
 
 /** Forms of a waiver typed alone that count (second review of PR #160): tab, non-breaking spaces, CRLF, BOM, final line break. */

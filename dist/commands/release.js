@@ -4,7 +4,7 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { loadConfig, loadConfigAtCommit, suiteSettings } from '../config/load.js';
 import { enforceBaseGates } from '../gates/base-gates.js';
 import { runGates } from '../gates/run.js';
-import { pickStacks as pickFresh, withFreshCopy } from '../gates/fresh-copy.js';
+import { pickStacks as pickFresh, removeStaleCopies, withFreshCopy } from '../gates/fresh-copy.js';
 import { prepareMainCopy } from '../gates/spread.js';
 import { classifyUnstable, releaseWaiver, waiverWords, writeFindings } from '../release/unstable.js';
 import { TEMPLATE_WAIVER_NOTE, waiverSentence } from '../rules/operator.js';
@@ -85,19 +85,19 @@ async function fullProof(repo, sha, from, production) {
 }
 const proofLines = (proof) => proof.gates.filter(g => g.state !== 'passed').map(g => `${g.gateId} (${g.state})`);
 /**
- * The verdict on the unstable checks of a proof (src/release/unstable.ts): in the copy of the suite when there is one, else in a
- * fresh copy of the commit prepared by batch.setup (the affectedList commands run the tools of the project); busy: blocking.
+ * The verdict on the unstable checks of a proof (src/release/unstable.ts), in a fresh copy of the commit prepared by batch.setup
+ * (the affectedList commands run the tools of the project), made only when a test is to be judged and removed after; never in
+ * the copy where the suite ran, where the tests of the change may have written what the command would load; busy: blocking.
  */
 async function judgeUnstable(ctx, repo, sha, production, proof) {
-    const config = proofConfig(repo, sha, production);
+    // The setup, the environment and the timeouts of the judgment are those of production, never of the candidate (it would run its own).
+    const config = loadConfigAtCommit(repo, production).config;
     const log = (line) => ctx.io.stderr(`${line}\n`);
     const judge = (copy) => classifyUnstable({ repo, copy, commit: sha, production, config, proof, env: ctx.io.env, log });
-    if (ctx.copy)
-        return judge(ctx.copy);
     const done = await withFreshCopy(repo, commonDir(repo), sha, async (dir) => {
         await prepareMainCopy({ repo: dir, config, env: ctx.io.env, log, always: 'copie neuve de la mise en ligne' });
         return judge(dir);
-    }, log);
+    }, log, '-jugement');
     return 'busy' in done ? { tests: [], blocking: [`${done.busy} : les tests instables se jugent plus tard`], busy: true } : done;
 }
 /**
@@ -228,6 +228,9 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
         return EXIT.ok;
     }
     try {
+        // Copies left by an earlier pass (a removal that failed, a copy locked by a suite): removed, locked ones included.
+        if (!dryRun)
+            await removeStaleCopies(repo, common, line => io.stderr(`${line}\n`));
         const state = remoteState(repo);
         const { settings, settings: { branch, from }, fromHead, production } = state;
         const base = { ok: true, published: false, sha: fromHead, branch, from, previous: production, migrations: null, lines: [] };
@@ -248,7 +251,7 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
         // A failure of the code is never run again at the same commit, --force-retry included: only a new commit unblocks it.
         // Only a run whose every failure is an infrastructure failure (src/gates/infrastructure.ts) is run again, 30 minutes
         // after its receipts at the earliest (--force-retry: at once). A green proof alone never suffices: the suite runs in the
-        // fresh copy, which reuses what checks out in its own environment (docs/UNE-SUITE-PAR-PR.md, 2).
+        // fresh copy, which reuses what checks out in its own environment (docs/UNE-SUITE-PAR-PR.md, « Ce qui reste »).
         const proof = await fullProof(repo, fromHead, from, production);
         if (proof.flaky.length) {
             if (proof.ok)
@@ -267,19 +270,15 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
         const piles = pickStacks(proofConfig(repo, fromHead, production), common, forced);
         if ('busy' in piles)
             return report(io, asJson, { ...base, lines: [`Piles occupées (${piles.busy}) : plus tard ; rien n'est lancé.`] }, false, 'auto');
-        const outcome = await withFreshCopy(repo, common, fromHead, async (dir) => {
-            const suite = await runSuite(io, dir, fromHead, proofConfig(repo, fromHead, production), production, piles.ids);
-            if (suite.busy)
-                return { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] };
-            if (suite.infrastructure)
-                return { ...base, ok: false, lines: [`Suite complète à ${short(fromHead)} : panne d'infrastructure : ${suite.infrastructure} ; rien n'est publié.`] };
-            if (!suite.ok)
-                return { ...base, ok: false, lines: [`Suite complète rouge à ${short(fromHead)} : ${suite.summary} ; rien n'est publié.`] };
-            // Green, unstable checks included: the release judges them in this very copy.
-            return release(repo, state, fromHead, false, { io, copy: dir, reused: suite.reused });
-        }, line => io.stderr(`${line}\n`));
-        if ('busy' in outcome)
-            return report(io, asJson, { ...base, lines: [`Copie neuve occupée (${outcome.busy}) : plus tard ; rien n'est lancé.`] }, false, 'auto');
+        const ran = await withFreshCopy(repo, common, fromHead, async (dir) => ({ suite: await runSuite(io, dir, fromHead, proofConfig(repo, fromHead, production), production, piles.ids) }), line => io.stderr(`${line}\n`));
+        if (!('suite' in ran))
+            return report(io, asJson, { ...base, lines: [`Copie neuve occupée (${ran.busy}) : plus tard ; rien n'est lancé.`] }, false, 'auto');
+        const { suite } = ran;
+        const outcome = suite.busy ? { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] }
+            : suite.infrastructure ? { ...base, ok: false, lines: [`Suite complète à ${short(fromHead)} : panne d'infrastructure : ${suite.infrastructure} ; rien n'est publié.`] }
+                : !suite.ok ? { ...base, ok: false, lines: [`Suite complète rouge à ${short(fromHead)} : ${suite.summary} ; rien n'est publié.`] }
+                    // Green, unstable checks included: the release judges them in another fresh copy, once the one of the suite is removed.
+                    : await release(repo, state, fromHead, false, { io, reused: suite.reused });
         // A machine busy is a pass that did nothing: not journaled, as before.
         return report(io, asJson, outcome, !outcome.lines[0]?.startsWith('Machine occupée'), 'auto');
     }
@@ -300,9 +299,9 @@ function pickStacks(config, common, forced) {
 }
 /**
  * The full suite of `sha` in its fresh copy `dir`, without waiting for the queue. A check whose green receipt of an identical
- * tree checks out in this environment is reused (the suite of the branch, docs/UNE-SUITE-PAR-PR.md, 2.1); the changed test
- * files already repeated at the same content are credited (2.2). `ok`: every check passed, some perhaps only after a relaunch
- * (judged by the release).
+ * tree checks out in this environment is reused (a release run again at the same tree, docs/UNE-SUITE-PAR-PR.md, « Ce qui
+ * reste »); every test changed since production is repeated, none is credited. `ok`: every check passed, some perhaps only
+ * after a relaunch (judged by the release).
  */
 async function runSuite(io, dir, sha, config, production, stacks) {
     try {

@@ -1,11 +1,16 @@
 import type { ApvConfig } from '../config/load.js';
 /** The directory of the fresh copy of `tree` (40 or 64 hexadecimal characters): `<common>/apv/fresh/<16 first>`. */
-export declare const freshCopyDir: (common: string, tree: string) => string;
+export declare const freshCopyDir: (common: string, tree: string, slot?: string) => string;
+/**
+ * Removes the copies left in `<common>/apv/fresh` by an earlier pass (a removal that failed, a pass killed), locked ones included,
+ * at the start of `apv release auto`. A copy whose lease is held (another release at work) is left alone. Returns the removed ones.
+ */
+export declare function removeStaleCopies(repo: string, common: string, log?: (line: string) => void): Promise<string[]>;
 /**
  * Runs `fn` in the fresh copy of `sha` (made, then removed whatever happens), or returns `busy` when another copy of the
  * same tree is in use. A directory left by an interrupted run is removed first (it is a copy, never a working tree).
  */
-export declare function withFreshCopy<T>(repo: string, common: string, sha: string, fn: (dir: string) => Promise<T>, log?: (line: string) => void): Promise<T | {
+export declare function withFreshCopy<T>(repo: string, common: string, sha: string, fn: (dir: string) => Promise<T>, log?: (line: string) => void, slot?: string): Promise<T | {
     busy: string;
 }>;
 /**

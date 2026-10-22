@@ -1,10 +1,11 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfigAtCommit } from '../config/load.js';
-import { validateReceipt } from '../domain/contracts.js';
+import { DEFAULT_GENERATED_PATHS, validateReceipt } from '../domain/contracts.js';
 import { errorMessage } from '../domain/errors.js';
 import { Git } from '../execution/git.js';
 import { environment, expandCommand, redact, runProcess } from '../execution/process.js';
+import { matches } from '../policy/policy.js';
 import { RECEIPTS_DIR, sharedStore } from '../gates/store.js';
 import { sharedRunReceipts } from '../gates/reuse-proof.js';
 import { anchorKey, ignoredWaiver, readOperatorMessages, templateWaiver, waiverFor } from '../rules/operator.js';
@@ -43,6 +44,23 @@ export function pathsIn(text, tracked, all = false) {
     }
     return [...out].sort();
 }
+/**
+ * Paths of the tooling an `affectedList` command may run through (review of PR #162): the scripts, the manifests and lock files
+ * of the dependencies (the shared list of the generated paths), the settings of the runners and of the compiler, the
+ * configuration files at any depth, the test support folders. A change to one of them, or to a file the command names, and the
+ * judgment « sans rapport » is refused: the list could come from what the change itself rewrote. No analysis of what a script
+ * loads (it cannot be done for all that a script loads). The judgment protects against accidents, not against a change written
+ * to deceive it: listing the tests runs the code of the candidate (docs/UNE-SUITE-PAR-PR.md, 3).
+ */
+export const TOOLING_PATHS = ['**/scripts/**', '**/package.json', ...DEFAULT_GENERATED_PATHS, '**/.npmrc', '**/.yarnrc*',
+    '**/pnpm-workspace.yaml', '**/bunfig.toml', '**/tsconfig*.json', '**/*.config.*',
+    '.apv/**', '**/jsconfig*.json', '**/deno.json*', '**/.pnpmfile.cjs', '**/.yarn/**', '**/vitest.workspace.*', '**/.mocharc*', '**/.babelrc*', '**/.swcrc',
+    '**/tests/support/**', '**/test/support/**', '**/.gitattributes'];
+/** The changed files that are tooling or that the `affectedList` command names as a path of the commit, sorted. */
+export function toolingTouched(changed, argv, tracked) {
+    const cited = new Set(pathsIn(argv.join(' '), tracked, true));
+    return [...changed].filter(f => cited.has(f) || TOOLING_PATHS.some(pattern => matches(f, pattern))).sort();
+}
 /** The receipt `verify` retained for a check (worktree, else the intact run of the shared store), or null. */
 function retained(repo, store, g) {
     if (!g.runId || !g.receipt)
@@ -61,7 +79,8 @@ function retained(repo, store, g) {
 }
 /**
  * The verdict on the unstable checks of `proof` at `commit`, released from `production`: each relaunched test, related or not.
- * `copy`: a prepared copy of the commit, where the `affectedList` commands run. `config`: the checks of the release (those of
+ * `copy`: a fresh copy of the commit, prepared by `batch.setup`, never the copy where the suite ran (what the tests of the
+ * change wrote there is not the commit): where the `affectedList` commands run. `config`: the checks of the release (those of
  * production kept); `affectedList` is read at production only.
  */
 export async function classifyUnstable(input) {
@@ -87,8 +106,12 @@ export async function classifyUnstable(input) {
         const declared = atProduction?.gates.find(x => x.id === g.gateId)?.affectedList;
         let affected = null;
         let listError = null;
+        // The command and the setup of the copy (read at production): the paths they name are tooling too.
+        const touched = declared ? toolingTouched(changed, [...declared, ...(atProduction?.batch?.setup ?? [])], tracked) : [];
         if (!declared)
             listError = `${g.gateId} ne déclare pas affectedList à la production (${production.slice(0, 12)}) : le lien des tests avec le changement (graphe d'imports) ne se juge pas`;
+        else if (touched.length)
+            listError = `${g.gateId} : le changement depuis la production touche l'outillage de affectedList (${touched.slice(0, 5).join(', ')}${touched.length > 5 ? ', …' : ''}) : la liste pourrait venir de ce que la PR a réécrit, aucun test n'est jugé sans rapport`;
         else {
             const gate = input.config.gates.find(x => x.id === g.gateId);
             const env = environment([...input.config.environment.passEnv, ...(gate?.passEnv ?? [])], input.env);

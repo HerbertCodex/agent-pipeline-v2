@@ -9,8 +9,9 @@ import type { VerifyResult } from '../gates/verify.js';
  * neither added nor modified since production; and it is not among the test files the `affectedList` command of its check,
  * **read at production**, prints for the changes since production (the same computation as `affected`: the import graph of the
  * tests). Anything else blocks, as before: no test named (no `retryFailed.testPattern`, or no line matching it), a file the name
- * does not give, a check without `affectedList` at production, a list that fails, a test of a changed file or that the change
- * concerns. A failure that the relaunch did not cure, a repetition of a changed test that failed, a migration not confirmed:
+ * does not give, a check without `affectedList` at production, a list that fails, a change that touches the tooling of the
+ * command (`toolingTouched`: scripts, manifests, lock files, configuration, the paths the command names: the list would come
+ * from what the change rewrote), a test of a changed file or that the change concerns. A failure that the relaunch did not cure, a repetition of a changed test that failed, a migration not confirmed:
  * still refused, elsewhere, as before. What blocks here, the operator alone can waive for the exact released commit
  * (`releaseWaiver`, « dérogation instable <commit> : <raison> »): published, each test written as a finding with his words.
  */
@@ -67,8 +68,20 @@ export declare function releaseWaiver(common: string, sha: string, blocking: rea
  */
 export declare function pathsIn(text: string, tracked: readonly string[], all?: boolean): string[];
 /**
+ * Paths of the tooling an `affectedList` command may run through (review of PR #162): the scripts, the manifests and lock files
+ * of the dependencies (the shared list of the generated paths), the settings of the runners and of the compiler, the
+ * configuration files at any depth, the test support folders. A change to one of them, or to a file the command names, and the
+ * judgment « sans rapport » is refused: the list could come from what the change itself rewrote. No analysis of what a script
+ * loads (it cannot be done for all that a script loads). The judgment protects against accidents, not against a change written
+ * to deceive it: listing the tests runs the code of the candidate (docs/UNE-SUITE-PAR-PR.md, 3).
+ */
+export declare const TOOLING_PATHS: readonly string[];
+/** The changed files that are tooling or that the `affectedList` command names as a path of the commit, sorted. */
+export declare function toolingTouched(changed: Iterable<string>, argv: readonly string[], tracked: readonly string[]): string[];
+/**
  * The verdict on the unstable checks of `proof` at `commit`, released from `production`: each relaunched test, related or not.
- * `copy`: a prepared copy of the commit, where the `affectedList` commands run. `config`: the checks of the release (those of
+ * `copy`: a fresh copy of the commit, prepared by `batch.setup`, never the copy where the suite ran (what the tests of the
+ * change wrote there is not the commit): where the `affectedList` commands run. `config`: the checks of the release (those of
  * production kept); `affectedList` is read at production only.
  */
 export declare function classifyUnstable(input: {
