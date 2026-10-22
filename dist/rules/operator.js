@@ -438,7 +438,7 @@ export function sentences(text) {
 /** Shortest quote that can anchor a validation: « ok » or « oui » alone never does. */
 export const MIN_QUOTE = 12;
 /** Words that make a sentence a validation, whose first words are kept for the reader. */
-export const VALIDATES = /valid|approuv|accord|d[ée]rogation|go pour|on part/i;
+export const VALIDATES = /valid|approuv|accord|go pour|on part/i;
 /** Shortest prefix of the commit a waiver must name. */
 export const WAIVER_SHA = 12;
 /** Shortest reason after the commit, in characters. */
@@ -495,7 +495,8 @@ function keptLine(raw, headOnly = false) {
  * dérogation » waived the rule); otherwise each is kept apart, as ignored, with why.
  */
 export function journalEntry(text, meta, key) {
-    const list = sentences(text);
+    // A sentence in the form of a waiver anchors nothing (a validation of mockup, a migration): ignored or old, it stays a quote of a waiver.
+    const list = sentences(text).filter(s => !WAIVER_WORDS.test(s));
     // A message of questions or quotes only is kept (its date), with no sentence that could anchor anything.
     if (!comparable(text).replace(EDGE, ''))
         return null;

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
 import { ALL_CAPTURES, TEST_KEY, commonDirOf, notWaivers, operatorSays, plainWaivers, png, seedReview, waive } from './support/rules.mjs';
-import { waiverFor, anchoredQuote, journalEntry } from '../dist/rules/operator.js';
+import { waiverFor, anchoredQuote, journalEntry, VALIDATES } from '../dist/rules/operator.js';
 import { isScreen } from '../dist/rules/screens.js';
 import { runsCommand } from '../dist/rules/required.js';
 import { nearTimeout, busyReasons } from '../dist/gates/run.js';
@@ -677,6 +677,13 @@ test('delta review of PR #160 (F2, F3): an ignored line keeps its head only; an 
   assert.deepEqual(refused.ignored.map(i => i.line), [`dérogation instable ${sha12}`]);
   assert.ok(ignoredWaiver([refused], 'instable', sha), 'the refusal still says why');
   assert.equal(waiverFor([refused], 'instable', sha), null, 'and the kept head waives nothing');
+  // L1 (review of PR #162): a sentence in the form of a waiver anchors nothing, and « dérogation » validates no mockup.
+  const quote = `Non, pas de dérogation instable ${sha12} : le mot de passe est hunter2`;
+  assert.equal(anchoredQuote([refused], quote, TEST_KEY), null, 'the refused waiver is no anchor');
+  const plain = `dérogation instable ${sha12} : test ancien sans rapport`;
+  assert.equal(anchoredQuote([journalEntry(plain, { at: 't', session: 's' }, TEST_KEY)], plain, TEST_KEY), null, 'nor is a waiver');
+  assert.equal(VALIDATES.test('dérogation instable'), false);
+  assert.ok(anchoredQuote([journalEntry(`Je valide la maquette des articles. Dérogation instable ${sha12} : test ancien sans rapport`, { at: 't', session: 's' }, TEST_KEY)], 'Je valide la maquette des articles.', TEST_KEY), 'a validation beside it still anchors');
   // F3: the same message signed by the previous hook (v 2) is read for its sentences, never for its waiver lines.
   const root = mkdtempSync(join(tmpdir(), 'apv4-journal-v2-'));
   try {

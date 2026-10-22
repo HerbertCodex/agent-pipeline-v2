@@ -69,13 +69,19 @@ test, fichiers, « échoue 1 fois sur 2 passages », exécution) et suivi (`.apv
 la mise en ligne »), pour une correction à part.
 
 Restent bloquants : un test ajouté ou modifié, ou concerné par le changement ; un nom sans fichier, un contrôle sans
-`affectedList` à la production (une PR ne s'en sert jamais pour elle-même), une liste en échec ; **un changement depuis la
-production qui touche un fichier que la commande exécute** (alpha.8) : la commande est lue à la production, mais son script vient de
-la copie du commit candidat, et une PR qui le modifie déciderait pour elle-même (un `process.exit(0)` en tête rend une liste vide).
-Sont comptés les chemins de fichiers de la commande, le `package.json` et les chemins du script quand elle lance `npm run <script>`
-(`pnpm`, `yarn`, `bun` de même), et ce que ces fichiers importent localement (`./`, `../`, extensions et `index` essayés) ; un paquet
-n'est pas suivi. Un fichier de la commande modifié : aucun test n'est jugé sans rapport, la mise en ligne est refusée comme avant
-l'alpha.5 (dérogation de l'opérateur possible, 3.1) ; tout échec que la relance n'a pas
+`affectedList` à la production (une PR ne s'en sert jamais pour elle-même), une liste en échec ; **une commande dont le script n'est pas
+sûr** (alpha.8) : la commande est lue à la production, mais son script vient de la copie du commit candidat, et une PR qui le
+modifie déciderait pour elle-même (un `process.exit(0)` en tête rend une liste vide). La mise en ligne est refusée, comme avant
+l'alpha.5 (dérogation de l'opérateur possible, 3.1), quand : (a) le changement depuis la production touche un fichier que la
+commande exécute : les chemins de ses arguments, le `package.json`, `.npmrc`, `.yarnrc*`, `bunfig.toml` et `tsconfig*.json` de la
+racine et de leurs dossiers, le script de `package.json` d'un `<npm|pnpm|yarn|bun> run <script>` (avec `pre` et `post`), les modules
+locaux (`./`, `../`) de chaque script ; (b) la copie où la suite a tourné a un fichier suivi modifié, ou un fichier de la commande
+qui diffère du commit (un test du candidat a pu le réécrire) ; (c) l'outil ne sait pas suivre la commande, ce qui échoue fermé :
+`npm test`, `npm run --silent`, `npx` et toute autre forme que `<lanceur> run <script>` ; un script qui en appelle un autre ou
+introuvable ; un fichier qui n'est ni JavaScript/TypeScript ni JSON (un `.sh`) ; un lien symbolique ; un `import()` ou `require()`
+non littéral (gabarit, chemin calculé) ; un paquet, un nom nu ou un import `#` (seuls les modules de Node et les modules locaux
+sont suivis) ; un module introuvable ; plus de 300 fichiers. Limite connue : un fichier de données que le script lit (`readFileSync`)
+n'est pas suivi ; le garder hors de ce que la PR modifie, ou ne pas déclarer `affectedList`. Tout échec que la relance n'a pas
 guéri ; toute répétition en échec ; toute migration non confirmée (`release.migrations`) ; une preuve instable et incomplète
 (jamais relancée au même commit).
 

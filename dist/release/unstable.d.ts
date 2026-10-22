@@ -68,12 +68,20 @@ export declare function releaseWaiver(common: string, sha: string, blocking: rea
  */
 export declare function pathsIn(text: string, tracked: readonly string[], all?: boolean): string[];
 /**
- * The files of the commit that an `affectedList` command executes (review of 22 October 2026, F4): the paths its arguments name,
- * the `package.json` and the paths of the script when it runs one (`npm run <script>`), and what those files import locally
- * (relative specifiers; every extension and index file that exists). Read in the commit: a file the change did not touch has
- * the content it has at production, one it touched is in the changed files anyway. A package is not followed.
+ * The files of the commit that an `affectedList` command executes (review of 22 October 2026, F4 and its review), and what
+ * the tool does not know how to follow (`unknown`): the command cannot then be trusted and the judgment « sans rapport » fails
+ * closed. Counted: the paths its arguments name; the `package.json`, `.npmrc`, `.yarnrc*`, `bunfig.toml` and `tsconfig*.json`
+ * of the root and of the folders of the files above; for `npm|pnpm|yarn|bun run <script>` the script of `package.json`
+ * (with its `pre` and `post`) and the paths it names; the local modules (`./`, `../`) of every script, read in the commit.
+ * Unknown: a runner called any other way (`npm test`, `npm run --silent`), a script that calls another runner or is missing,
+ * a file that is neither a script nor JSON, a symbolic link, an `import()` or `require()` that is not a plain string, a package
+ * (bare name, `#` import) that is not a Node module, a module not found, more than 300 files. A file that a script reads as
+ * data is not followed (documented limit).
  */
-export declare function commandFiles(argv: readonly string[], tracked: readonly string[], read: (path: string) => Promise<string | null>): Promise<string[]>;
+export declare function commandFiles(argv: readonly string[], tracked: readonly string[], read: (path: string) => Promise<string | null>, symlinks?: ReadonlySet<string>): Promise<{
+    files: string[];
+    unknown: string[];
+}>;
 /**
  * The verdict on the unstable checks of `proof` at `commit`, released from `production`: each relaunched test, related or not.
  * `copy`: a prepared copy of the commit, where the `affectedList` commands run. `config`: the checks of the release (those of

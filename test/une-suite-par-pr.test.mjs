@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
@@ -206,11 +206,88 @@ test('F4: a change to a file the affectedList command executes (script, local im
 test('commandFiles: the paths of the command, the script it runs and the local imports, followed through extensions and index files', async () => {
   const tracked = ['package.json', 'scripts/a.mjs', 'scripts/lib/b.ts', 'scripts/lib/c/index.js', 'scripts/other.mjs', 'src/app.js'];
   const sources = { 'package.json': JSON.stringify({ scripts: { changed: 'node scripts/a.mjs --list' } }),
-    'scripts/a.mjs': `import { b } from './lib/b.js';\nconst c = await import('./lib/c');\nimport fs from 'node:fs';\nimport x from 'vitest';\n`, 'scripts/lib/b.ts': `export { y } from '../other.mjs';\n` };
+    'scripts/a.mjs': `import { b } from './lib/b.js';\nconst c = await import('./lib/c');\nimport fs from 'node:fs';\nimport x from 'vitest';\n`, 'scripts/lib/b.ts': `export { y } from '../other.mjs';\n`, 'scripts/lib/c/index.js': '\n', 'scripts/other.mjs': '\n' };
   const read = async path => sources[path] ?? null;
-  assert.deepEqual(await commandFiles(['node', 'scripts/a.mjs', '{{baseSha}}'], tracked, read), ['scripts/a.mjs', 'scripts/lib/b.ts', 'scripts/lib/c/index.js', 'scripts/other.mjs']);
-  assert.deepEqual(await commandFiles(['npm', 'run', 'changed', '--', '{{baseSha}}'], tracked, read), ['package.json', 'scripts/a.mjs', 'scripts/lib/b.ts', 'scripts/lib/c/index.js', 'scripts/other.mjs']);
-  assert.deepEqual(await commandFiles(['echo', 'rien'], tracked, read), []);
+  // `vitest` is a package: not followed, so unknown (fail closed); everything else is known.
+  const a = await commandFiles(['node', 'scripts/a.mjs', '{{baseSha}}'], tracked, read);
+  assert.deepEqual(a.files, ['package.json', 'scripts/a.mjs', 'scripts/lib/b.ts', 'scripts/lib/c/index.js', 'scripts/other.mjs']);
+  assert.deepEqual(a.unknown.map(u => u.replace(/^.* : /, '')), ['« vitest » n\'est ni un module local ni un module de Node']);
+  const clean = { ...sources, 'scripts/a.mjs': `import { b } from './lib/b.js';\nconst c = await import('./lib/c');\nimport fs from 'node:fs';\n` };
+  const readClean = async path => clean[path] ?? null;
+  const ok = await commandFiles(['npm', 'run', 'changed', '--', '{{baseSha}}'], tracked, readClean);
+  assert.deepEqual(ok, { files: ['package.json', 'scripts/a.mjs', 'scripts/lib/b.ts', 'scripts/lib/c/index.js', 'scripts/other.mjs'], unknown: [] });
+  assert.deepEqual(await commandFiles(['echo', 'rien'], tracked, readClean), { files: ['package.json'], unknown: [] });
+  // What the tool cannot follow is unknown: never a silent pass.
+  const unknownOf = async (argv, files, more = {}, symlinks = []) => (await commandFiles(argv, Object.keys({ ...files }), async p => ({ ...files, ...more })[p] ?? null, new Set(symlinks))).unknown.join(' | ');
+  const pkg = scripts => JSON.stringify({ scripts });
+  assert.match(await unknownOf(['npm', 'test'], { 'package.json': pkg({ test: 'node a.mjs' }) }), /seule la forme « npm run <script> » est suivie/);
+  assert.match(await unknownOf(['npm', 'run', '--silent', 'x'], { 'package.json': pkg({ x: 'node a.mjs' }) }), /seule la forme/);
+  assert.match(await unknownOf(['npm', 'run', 'x'], { 'package.json': pkg({ x: 'npm run y', y: 'node a.mjs' }) }), /appelle un autre lanceur/);
+  assert.match(await unknownOf(['npm', 'run', 'absent'], { 'package.json': pkg({ x: 'node a.mjs' }) }), /introuvable dans package\.json/);
+  assert.match(await unknownOf(['sh', 'a.sh'], { 'a.sh': 'echo\n' }), /a\.sh : ni script JavaScript ni JSON/);
+  assert.match(await unknownOf(['node', 'a.mjs'], { 'a.mjs': 'await import(`./x-${1}.mjs`);\n' }), /import\(\) ou require\(\) qui n'est pas une chaîne littérale/);
+  assert.match(await unknownOf(['node', 'a.mjs'], { 'a.mjs': 'require(name);\n' }), /n'est pas une chaîne littérale/);
+  assert.match(await unknownOf(['node', 'a.mjs'], { 'a.mjs': "import x from '#interne';\n" }), /« #interne » n'est ni un module local/);
+  assert.match(await unknownOf(['node', 'a.mjs'], { 'a.mjs': "import './absent.mjs';\n" }), /« \.\/absent\.mjs » introuvable/);
+  assert.match(await unknownOf(['node', 'a.mjs'], { 'a.mjs': '\n' }, {}, ['a.mjs']), /a\.mjs : lien symbolique/);
+  const many = Object.fromEntries(Array.from({ length: 320 }, (_, i) => [`d/f${i}.mjs`, '\n']));
+  assert.match(await unknownOf(['node', 'a.mjs'], { ...many, 'a.mjs': Object.keys(many).map(f => `import './${f}';`).join('\n') }), /plus de 300 fichiers/);
+  // The files of the configuration count beside the command, at the root and in the folders of its files.
+  const cfg = await commandFiles(['node', 'scripts/a.mjs'], ['scripts/a.mjs', '.npmrc', 'scripts/.npmrc', 'tsconfig.base.json', 'bunfig.toml', 'other/.npmrc'], async p => p === 'scripts/a.mjs' ? '\n' : null);
+  assert.deepEqual(cfg.files, ['.npmrc', 'bunfig.toml', 'scripts/.npmrc', 'scripts/a.mjs', 'tsconfig.base.json']);
+});
+
+/**
+ * Review of PR #162 (M1, M2): every way the list can come from something the tool did not read at the commit is refused, whatever
+ * the change; the witness (a change unrelated to the command) is published.
+ */
+test('M1, M2: a command the tool cannot follow, or a copy that is not the commit, is never judged unrelated: refused', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'apv4-une-suite-flaky-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const say = f => `console.log("Listing tests:\\n  [chromium] › tests/${f}.spec.ts:1:1 › x\\nTotal: 1 test in 1 file");`;
+  const [HONEST, LIE] = [say('old'), say('other')];
+  const NODE_LIST = ['node', 'scripts/affected-list.mjs', '{{baseSha}}'];
+  const lib = text => ({ 'scripts/lib/list.mjs': `export const list = () => { ${text} };\n` });
+  const cases = [
+    ['A6, the suite rewrites the script in its copy', { list: NODE_LIST, extra: [{ id: 'unit', stage: 'full', command: ['node', 'tests/run.mjs'] }],
+      files: { 'scripts/affected-list.mjs': `${HONEST}\n`, 'tests/run.mjs': '\n' },
+      attack: { 'tests/run.mjs': `import { writeFileSync } from 'node:fs'; writeFileSync('scripts/affected-list.mjs', ${JSON.stringify(LIE)});\n` }, why: /fichiers suivis modifiés \(scripts\/affected-list\.mjs\)/ }],
+    ['A1, import() with a template', { list: NODE_LIST, files: { 'scripts/affected-list.mjs': 'const { list } = await import(`./lib/list.mjs`); list();\n', ...lib(HONEST) },
+      attack: lib(LIE), why: /import\(\) ou require\(\) qui n'est pas une chaîne littérale/ }],
+    ['A9, a computed path', { list: NODE_LIST, files: { 'scripts/affected-list.mjs': "const m = await import(new URL('./lib/' + 'list.mjs', import.meta.url)); m.list();\n", ...lib(HONEST) },
+      attack: lib(LIE), why: /n'est pas une chaîne littérale/ }],
+    ['A2, an npm script that calls another', { list: ['npm', 'run', 'e2e:changed', '--', '{{baseSha}}'],
+      files: { 'package.json': { name: 'x', scripts: { 'e2e:changed': 'npm run e2e:core --', 'e2e:core': 'node scripts/affected-list.mjs' } }, 'scripts/affected-list.mjs': `${HONEST}\n` },
+      attack: { 'scripts/affected-list.mjs': `${LIE}\n` }, why: /appelle un autre lanceur/ }],
+    ['A3, npm run --silent', { list: ['npm', 'run', '--silent', 'e2e:changed', '--', '{{baseSha}}'],
+      files: { 'package.json': { name: 'x', scripts: { 'e2e:changed': 'node scripts/affected-list.mjs' } }, 'scripts/affected-list.mjs': `${HONEST}\n` },
+      attack: { 'scripts/affected-list.mjs': `${LIE}\n` }, why: /seule la forme « npm run <script> » est suivie/ }],
+    ['A3b, npm test', { list: ['npm', 'test', '--', '{{baseSha}}'],
+      files: { 'package.json': { name: 'x', scripts: { test: 'node scripts/affected-list.mjs' } }, 'scripts/affected-list.mjs': `${HONEST}\n` },
+      attack: { 'scripts/affected-list.mjs': `${LIE}\n` }, why: /seule la forme/ }],
+    ['A4, a shell script', { list: ['sh', 'scripts/affected.sh', '{{baseSha}}'], files: { 'scripts/affected.sh': 'node scripts/lib/list.mjs\n', ...lib(HONEST) },
+      attack: lib(LIE), why: /affected\.sh : ni script JavaScript ni JSON/ }],
+    ['A5, a .npmrc that makes Node require a file', { list: ['npm', 'run', 'e2e:changed', '--', '{{baseSha}}'],
+      files: { 'package.json': { name: 'x', scripts: { 'e2e:changed': 'node scripts/affected-list.mjs' } }, 'scripts/affected-list.mjs': `${HONEST}\n` },
+      attack: { '.npmrc': 'node-options=--require ./evil.cjs\n', 'evil.cjs': `${LIE} process.exit(0);\n` }, why: /touche un fichier que affectedList exécute \(.*\.npmrc/ }],
+    ['A8, a # import of package.json', { list: NODE_LIST, files: { 'package.json': { name: 'x', imports: { '#list': './scripts/lib/list.mjs' } }, 'scripts/affected-list.mjs': "import { list } from '#list'; list();\n", ...lib(HONEST) },
+      attack: lib(LIE), why: /« #list » n'est ni un module local ni un module de Node/ }],
+    ['A10, a symbolic link', { list: NODE_LIST, files: { 'scripts/real.mjs': `${HONEST}\n` }, links: [['scripts/affected-list.mjs', 'real.mjs']],
+      attack: { 'scripts/real.mjs': `${LIE}\n` }, why: /scripts\/affected-list\.mjs : lien symbolique/ }],
+  ];
+  for (const [name, { list, files, attack, why, extra = [], links = [] }] of cases) {
+    const p = project(t, { gates: [scriptedGate(dir, list), ...extra], files: { 'tests/old.spec.ts': 'old\n', 'src/x.js': 'x\n', ...files } });
+    for (const [link, target] of links) { rmSync(join(p.repo, link), { force: true }); symlinkSync(target, join(p.repo, link)); }
+    if (links.length) { git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'liens'); git(p.repo, 'push', '-q', 'origin', 'main'); git(p.repo, 'push', '-q', 'origin', 'main:production', '--force'); }
+    const before = p.remote('production');
+    put(p.repo, 'src/x.js', 'x2\n');
+    for (const [path, text] of Object.entries(attack)) put(p.repo, path, text);
+    git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'attaque'); git(p.repo, 'push', '-q', 'origin', 'main');
+    const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+    assert.equal(r.code, 1, `${name}\n${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, why, name);
+    assert.equal(p.remote('production'), before, name);
+    assert.equal(existsSync(join(p.repo, '.apv', 'state', 'suivi-constats.md')), false, `${name}: no finding, it blocks`);
+  }
 });
 
 test('AC-4: a test modified by the pull request that is unstable blocks: relaunched in the suite, or failing in the repetition (1 time out of 5)', async t => {
