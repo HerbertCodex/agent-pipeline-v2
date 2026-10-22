@@ -184,7 +184,9 @@ test('toolingTouched: scripts, manifests, locks, settings, configuration files a
   assert.deepEqual(touched(['src/lib/Comp.svelte', 'tests/a.spec.ts', 'docs/notes.md', 'supabase/migrations/1.sql', 'static/a.png']), []);
   assert.deepEqual(touched(['tools/list.mjs']), ['tools/list.mjs'], 'a path the command names');
   for (const f of ['scripts/x.mjs', 'apps/web/scripts/y/z.sh', 'package.json', 'apps/web/package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'npm-shrinkwrap.json',
-    '.npmrc', 'apps/web/.npmrc', '.yarnrc', '.yarnrc.yml', 'bunfig.toml', 'tsconfig.json', 'tsconfig.base.json', 'vite.config.ts', 'apps/web/playwright.config.ts', 'affected.config.json']) {
+    '.npmrc', 'apps/web/.npmrc', '.yarnrc', '.yarnrc.yml', 'bunfig.toml', 'tsconfig.json', 'tsconfig.base.json', 'vite.config.ts', 'apps/web/playwright.config.ts', 'affected.config.json',
+    '.apv/config.json', 'jsconfig.json', 'deno.json', 'deno.jsonc', '.pnpmfile.cjs', '.yarn/releases/yarn.cjs', 'vitest.workspace.ts', '.mocharc.cjs', '.babelrc', '.swcrc',
+    'tests/support/projects.mjs', 'apps/web/test/support/a.ts', '.gitattributes']) {
     assert.deepEqual(touched([f]), [f], f);
   }
 });
@@ -287,6 +289,44 @@ test('F4, M1, M2: a change to the tooling is refused; what the suite writes in i
   const ok = await apv(w.repo, ['release', 'auto'], ALLOW);
   assert.equal(ok.code, 0, ok.stdout + ok.stderr);
   assert.equal(w.remote('production'), sha);
+});
+
+/** A setup that appends `label cwd` to `log`: what prepares a copy, and where. */
+const labelled = (log, label) => node(`require("fs").appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(label)} + " " + process.cwd() + "\\n")`);
+
+test('M3, M4: the copy of the judgment is prepared by the setup of production, never of the candidate, and is not the copy of the suite', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'apv4-une-suite-flaky-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = join(dir, 'setups.log');
+  const p = project(t, { gates: [scriptedGate(dir, ['node', 'scripts/affected-list.mjs', '{{baseSha}}'])], extra: { batch: { setup: labelled(log, 'production') } },
+    files: { 'tests/old.spec.ts': 'old\n', 'src/x.js': 'x\n', 'scripts/affected-list.mjs': `${say('other')}\n` } });
+  // The candidate declares its own setup (and changes the code): the judgment must not run it.
+  const config = JSON.parse(readFileSync(join(p.repo, '.apv', 'config.json'), 'utf8'));
+  put(p.repo, '.apv/config.json', { ...config, batch: { setup: labelled(log, 'candidat') } });
+  p.commit('src/x.js', 'x2\n'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  const lines = readFileSync(log, 'utf8').trim().split('\n').map(l => l.split(' '));
+  assert.ok(lines.length >= 2, `${r.stdout}${r.stderr}\n${lines.join('\n')}`);
+  const [last] = lines.slice(-1);
+  assert.equal(last[0], 'production', 'the last copy prepared, the one of the judgment, ran the setup of production');
+  assert.deepEqual(lines.filter(l => l[0] === 'production').length, 1, 'once');
+  const suite = lines.find(l => l[0] === 'candidat');
+  assert.ok(suite, 'the suite, itself, ran the candidate (not the judgment)');
+  assert.notEqual(last[1], suite[1], 'the copy of the judgment is not the one of the suite');
+  assert.match(last[1], /-jugement$/);
+});
+
+test('F1: a copy left locked by an earlier pass (git worktree lock) is unlocked and removed at the start of apv release auto', async t => {
+  const p = project(t);
+  const common = join(p.repo, '.git');
+  const stale = join(common, 'apv', 'fresh', 'abcdef0123456789');
+  mkdirSync(dirname(stale), { recursive: true });
+  git(p.repo, 'worktree', 'add', '-q', '--detach', stale, 'HEAD');
+  git(p.repo, 'worktree', 'lock', stale);
+  assert.match(git(p.repo, 'worktree', 'list', '--porcelain'), /abcdef0123456789/);
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(existsSync(stale), false, 'the directory is gone');
+  assert.doesNotMatch(git(p.repo, 'worktree', 'list', '--porcelain'), /abcdef0123456789/, 'and the entry of Git');
 });
 
 test('AC-4: a test modified by the pull request that is unstable blocks: relaunched in the suite, or failing in the repetition (1 time out of 5)', async t => {

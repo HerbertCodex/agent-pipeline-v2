@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { LockStore } from '../lock/store.js';
@@ -9,25 +9,61 @@ function git(repo, args) {
     return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? (r.error ? errorMessage(r.error) : '') };
 }
 /** The directory of the fresh copy of `tree` (40 or 64 hexadecimal characters): `<common>/apv/fresh/<16 first>`. */
-export const freshCopyDir = (common, tree) => join(common, 'apv', 'fresh', tree.slice(0, 16));
+export const freshCopyDir = (common, tree, slot = '') => join(common, 'apv', 'fresh', `${tree.slice(0, 16)}${slot}`);
+/** Removes a copy, even a locked one (`git worktree lock` by a suite that wanted its copy to stay): unlock first, then remove. */
+function removeCopy(repo, dir) {
+    git(repo, ['worktree', 'unlock', dir]);
+    return git(repo, ['worktree', 'remove', '--force', '--force', dir]);
+}
+/**
+ * Removes the copies left in `<common>/apv/fresh` by an earlier pass (a removal that failed, a pass killed), locked ones included,
+ * at the start of `apv release auto`. A copy whose lease is held (another release at work) is left alone. Returns the removed ones.
+ */
+export async function removeStaleCopies(repo, common, log = () => undefined) {
+    const root = join(common, 'apv', 'fresh');
+    if (!existsSync(root))
+        return [];
+    const store = new LockStore(join(common, 'apv', 'locks'));
+    const removed = [];
+    for (const entry of readdirSync(root)) {
+        const name = `fresh-${entry}`;
+        const lock = await store.tryAcquire(name, { pid: process.pid, host: store.host, label: `nettoyage de ${entry}` }, 600, 'nettoyage des copies neuves');
+        if (!lock.ok)
+            continue;
+        try {
+            const dir = join(root, entry);
+            const r = removeCopy(repo, dir);
+            rmSync(dir, { recursive: true, force: true });
+            if (r.status !== 0)
+                log(`Copie ${dir} laissée par une passe précédente : retrait forcé après git : ${r.stderr.trim().slice(0, 200)}`);
+            removed.push(dir);
+        }
+        finally {
+            await store.release(name, { token: lock.record.token }).catch(() => undefined);
+        }
+    }
+    if (removed.length)
+        git(repo, ['worktree', 'prune']);
+    return removed;
+}
 /**
  * Runs `fn` in the fresh copy of `sha` (made, then removed whatever happens), or returns `busy` when another copy of the
  * same tree is in use. A directory left by an interrupted run is removed first (it is a copy, never a working tree).
  */
-export async function withFreshCopy(repo, common, sha, fn, log = () => undefined) {
+export async function withFreshCopy(repo, common, sha, fn, log = () => undefined, slot = '') {
     const tree = git(repo, ['rev-parse', '--verify', '--quiet', `${sha}^{tree}`]).stdout.trim();
     if (!/^[0-9a-f]{40,64}$/.test(tree))
         throw new PipelineError('GATE_COPY', `arbre du commit ${sha.slice(0, 12)} illisible : copie neuve impossible`);
     const store = new LockStore(join(common, 'apv', 'locks'));
-    const name = `fresh-${tree.slice(0, 16)}`;
+    const name = `fresh-${tree.slice(0, 16)}${slot}`;
     const lock = await store.tryAcquire(name, { pid: process.pid, host: store.host, label: `copie neuve ${sha.slice(0, 12)} (${repo})` }, 12 * 3600, 'copie neuve de la suite complète');
     if (!lock.ok)
         return { busy: `copie neuve de l'arbre ${tree.slice(0, 12)} déjà en cours (verrou ${name} tenu par le pid ${lock.holder?.owner.pid ?? '?'})` };
-    const dir = freshCopyDir(common, tree);
+    const dir = freshCopyDir(common, tree, slot);
     try {
         mkdirSync(join(common, 'apv', 'fresh'), { recursive: true });
         if (existsSync(dir)) {
-            git(repo, ['worktree', 'remove', '--force', dir]);
+            removeCopy(repo, dir);
             rmSync(dir, { recursive: true, force: true });
             git(repo, ['worktree', 'prune']);
         }
@@ -39,7 +75,7 @@ export async function withFreshCopy(repo, common, sha, fn, log = () => undefined
             return await fn(dir);
         }
         finally {
-            const removed = git(repo, ['worktree', 'remove', '--force', dir]);
+            const removed = removeCopy(repo, dir);
             if (removed.status !== 0)
                 log(`Copie ${dir} non retirée : ${removed.stderr.trim()} (git worktree remove --force ${dir}).`);
         }

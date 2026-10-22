@@ -4,7 +4,7 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { loadConfig, loadConfigAtCommit, suiteSettings } from '../config/load.js';
 import { enforceBaseGates } from '../gates/base-gates.js';
 import { runGates } from '../gates/run.js';
-import { pickStacks as pickFresh, withFreshCopy } from '../gates/fresh-copy.js';
+import { pickStacks as pickFresh, removeStaleCopies, withFreshCopy } from '../gates/fresh-copy.js';
 import { prepareMainCopy } from '../gates/spread.js';
 import { classifyUnstable, releaseWaiver, waiverWords, writeFindings } from '../release/unstable.js';
 import { TEMPLATE_WAIVER_NOTE, waiverSentence } from '../rules/operator.js';
@@ -90,13 +90,14 @@ const proofLines = (proof) => proof.gates.filter(g => g.state !== 'passed').map(
  * the copy where the suite ran, where the tests of the change may have written what the command would load; busy: blocking.
  */
 async function judgeUnstable(ctx, repo, sha, production, proof) {
-    const config = proofConfig(repo, sha, production);
+    // The setup, the environment and the timeouts of the judgment are those of production, never of the candidate (it would run its own).
+    const config = loadConfigAtCommit(repo, production).config;
     const log = (line) => ctx.io.stderr(`${line}\n`);
     const judge = (copy) => classifyUnstable({ repo, copy, commit: sha, production, config, proof, env: ctx.io.env, log });
     const done = await withFreshCopy(repo, commonDir(repo), sha, async (dir) => {
         await prepareMainCopy({ repo: dir, config, env: ctx.io.env, log, always: 'copie neuve de la mise en ligne' });
         return judge(dir);
-    }, log);
+    }, log, '-jugement');
     return 'busy' in done ? { tests: [], blocking: [`${done.busy} : les tests instables se jugent plus tard`], busy: true } : done;
 }
 /**
@@ -227,6 +228,9 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
         return EXIT.ok;
     }
     try {
+        // Copies left by an earlier pass (a removal that failed, a copy locked by a suite): removed, locked ones included.
+        if (!dryRun)
+            await removeStaleCopies(repo, common, line => io.stderr(`${line}\n`));
         const state = remoteState(repo);
         const { settings, settings: { branch, from }, fromHead, production } = state;
         const base = { ok: true, published: false, sha: fromHead, branch, from, previous: production, migrations: null, lines: [] };

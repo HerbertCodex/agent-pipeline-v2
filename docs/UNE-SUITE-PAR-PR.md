@@ -66,11 +66,15 @@ est jugé. Il est **sans rapport** quand :
   tests du changement y ont écrit n'y est pas (même calcul que `affected`, voir la partie 4 pour des tests e2e) ; tout chemin du
   commit dans sa sortie compte ;
 - le changement depuis la production ne touche pas l'outillage de la commande (alpha.8) : `scripts/**`, `package.json`, les
-  verrous de dépendances, `.npmrc`, `.yarnrc*`, `bunfig.toml`, `pnpm-workspace.yaml`, `tsconfig*.json`, `*.config.*` à toute
-  profondeur (`TOOLING_PATHS`, qui reprend la liste des chemins générés `DEFAULT_GENERATED_PATHS`), ni un chemin que la commande
-  cite en clair. Le script de la liste vient du commit candidat : une PR qui le réécrit déciderait pour elle-même. Aucune analyse de
-  ce qu'un script charge (`child_process`, `createRequire`, processus, fichiers lus) : la règle de chemins échoue fermé, plus sûre
-  qu'un suivi des imports.
+  verrous de dépendances, `.npmrc`, `.yarnrc*`, `.yarn/**`, `.pnpmfile.cjs`, `bunfig.toml`, `pnpm-workspace.yaml`, `tsconfig*.json`,
+  `jsconfig*.json`, `deno.json*`, `*.config.*`, `vitest.workspace.*`, `.mocharc*`, `.babelrc*`, `.swcrc`, `.gitattributes`, `.apv/**`,
+  `tests/support/**` et `test/support/**` (`TOOLING_PATHS`, qui reprend la liste des chemins générés `DEFAULT_GENERATED_PATHS`), ni un
+  chemin que la commande cite en clair. Le script de la liste vient du commit candidat : une PR qui le réécrit déciderait pour
+  elle-même. Règle de chemins seule, sans suivi des imports.
+
+La copie neuve du jugement est préparée par le `batch.setup` et l'environnement de la **production** (jamais ceux du candidat), à un
+chemin distinct de celui de la suite (`fresh/<arbre>-jugement`). Les copies laissées par une passe précédente, verrouillées par
+`git worktree lock` comprises, sont retirées au début de `apv release auto`.
 
 Alors la mise en ligne continue, et le test est écrit comme **constat** : sortie, journal (`stack.log`, champ `unstable` : contrôle,
 test, fichiers, « échoue 1 fois sur 2 passages », exécution) et suivi (`.apv/state/suivi-constats.md`, section « Tests instables à
@@ -81,8 +85,11 @@ Restent bloquants : un test ajouté ou modifié, ou concerné par le changement 
 (ci-dessus ; dérogation de l'opérateur possible, 3.1) ; tout échec que la relance n'a pas guéri ; toute répétition en échec ; toute
 migration non confirmée (`release.migrations`) ; une preuve instable et incomplète (jamais relancée au même commit).
 
-Hors de portée : rien de connu. Un changement d'application seul (composant, route, style) est jugé ; un script d'outillage qui lit
-un fichier de données (`readFileSync`) est couvert quand ce fichier s'appelle `*.config.*` ou est sous `scripts/`, sinon le placer là.
+**Ce que le jugement ne fait pas.** Il protège contre les **accidents** (un test ancien qui échoue au hasard à côté d'un
+changement sans rapport), pas contre une PR écrite pour le tromper. Lister les tests exécute du code du candidat (le chargement des
+fichiers de test par le lanceur, les imports des scripts hors des chemins d'outillage ci-dessus) : une PR malveillante peut donc
+faire oublier un test à la liste. Les garde-fous qui restent : la relecture de sécurité à la fusion, la dérogation de l'opérateur
+(3.1) pour un cas bloqué, et le **constat écrit** pour chaque test instable publié (journal, suivi).
 
 Limite : `retryFailed.testPattern` doit nommer **chaque** test en échec de la première passe ; un test qu'il ne nomme pas n'est pas
 jugé. Relire le motif avec le format du rapporteur (Playwright `list` ou `line`).

@@ -70,9 +70,10 @@ export declare function pathsIn(text: string, tracked: readonly string[], all?: 
 /**
  * Paths of the tooling an `affectedList` command may run through (review of PR #162): the scripts, the manifests and lock files
  * of the dependencies (the shared list of the generated paths), the settings of the runners and of the compiler, the
- * configuration files at any depth. A change to one of them, or to a file the command names, and the judgment « sans rapport »
- * is refused: the list could come from what the change itself rewrote. No analysis of what a script loads (it cannot be done
- * for all that a script loads: `child_process`, `createRequire`, workers, files the suite creates).
+ * configuration files at any depth, the test support folders. A change to one of them, or to a file the command names, and the
+ * judgment « sans rapport » is refused: the list could come from what the change itself rewrote. No analysis of what a script
+ * loads (it cannot be done for all that a script loads). The judgment protects against accidents, not against a change written
+ * to deceive it: listing the tests runs the code of the candidate (docs/UNE-SUITE-PAR-PR.md, 3).
  */
 export declare const TOOLING_PATHS: readonly string[];
 /** The changed files that are tooling or that the `affectedList` command names as a path of the commit, sorted. */
