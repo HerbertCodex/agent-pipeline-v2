@@ -6,7 +6,8 @@ import { enforceBaseGates } from '../gates/base-gates.js';
 import { runGates, type ReusedCheck } from '../gates/run.js';
 import { pickStacks as pickFresh, withFreshCopy } from '../gates/fresh-copy.js';
 import { prepareMainCopy } from '../gates/spread.js';
-import { classifyUnstable, writeFindings, type UnstableTest, type UnstableVerdict } from '../release/unstable.js';
+import { classifyUnstable, releaseWaiver, waiverWords, writeFindings, type ReleaseWaiver, type UnstableTest, type UnstableVerdict } from '../release/unstable.js';
+import { TEMPLATE_WAIVER_NOTE, waiverSentence } from '../rules/operator.js';
 import { verifyGates, type VerifyResult } from '../gates/verify.js';
 import { LockStore } from '../lock/store.js';
 import type { ReleaseSettings } from '../release/config.js';
@@ -39,7 +40,9 @@ un contrôle dont un reçu vert d'un arbre identique se vérifie (même configur
 contenu sur leur branche ne sont pas répétés de nouveau (crédit de répétition). Puis publie si elle est verte.
 Test instable (réussi seulement après relance) : bloquant s'il est ajouté ou modifié depuis la production, ou concerné par
 le changement (affectedList du contrôle, lu à la production) ; sinon publié quand même, et écrit comme constat (journal,
-.apv/state/suivi-constats.md) avec son nom et son taux d'échec.
+.apv/state/suivi-constats.md) avec son nom et son taux d'échec. Bloquant, seul l'opérateur le lève pour le commit exact publié,
+en tapant lui-même « dérogation instable <12 premiers caractères du commit au moins> : <raison> » (la phrase de la fusion) :
+publié, constat avec sa date et sa raison (journal : waived). Jamais un échec non guéri, une répétition en échec, une migration.
 Section stacks déclarée : la suite reçoit une pile comme apv gates run --stacks (la première dont le verrou est libre, ou --stacks pour
 forcer) ; aucune libre : 0, piles occupées, plus tard. Panne d'infrastructure (variable absente, pile injoignable) : dite comme telle, 1.
 Même commit déjà tenté, lu dans ses reçus seuls (magasin vérifié comme apv gates verify) : échec de code : 1, jamais relancé,
@@ -91,7 +94,7 @@ const proofLines = (proof: VerifyResult): string[] => proof.gates.filter(g => g.
 /** A check the release took from a green receipt of an identical tree (the suite of the branch), without running it. */
 interface Reused { gateId: string; fromRun: string; fromCommit: string; origin: string }
 interface Outcome { ok: boolean; published: boolean; sha: string | null; branch: string; from: string; previous: string | null; migrations: Migrations | null; lines: string[]; push?: Git;
-  reused?: Reused[]; unstable?: UnstableTest[] }
+  reused?: Reused[]; unstable?: UnstableTest[]; waived?: ReleaseWaiver }
 /** What a release of `sha` brings with it: the copy where its suite ran (for affectedList), the checks it reused, the output. */
 interface ReleaseContext { io: CommandIO; copy?: string; reused?: readonly ReusedCheck[] }
 
@@ -108,7 +111,7 @@ async function judgeUnstable(ctx: ReleaseContext, repo: string, sha: string, pro
     await prepareMainCopy({ repo: dir, config, env: ctx.io.env, log, always: 'copie neuve de la mise en ligne' });
     return judge(dir);
   }, log);
-  return 'busy' in done ? { tests: [], blocking: [`${done.busy} : les tests instables se jugent plus tard`] } : done;
+  return 'busy' in done ? { tests: [], blocking: [`${done.busy} : les tests instables se jugent plus tard`], busy: true } : done;
 }
 
 /**
@@ -143,26 +146,38 @@ async function release(repo: string, state: ReturnType<typeof remoteState>, sha:
   const proof = await fullProof(repo, sha, from, production);
   if (!proof.ok) return refuse(`suite complète non prouvée à ${short(sha)}, contrôles de ${REMOTE}/${branch} compris : ${proofLines(proof).join(', ')} (apv gates run --stage full --base ${REMOTE}/${branch} dans une copie à ce commit)`);
   // An unstable test blocks unless it is unrelated to the change since production (docs/UNE-SUITE-PAR-PR.md, 3).
+  // What blocks there, only the operator's own waiver of `instable` for this exact commit lifts (src/release/unstable.ts):
+  // every check it reaches passed after the relaunch; a failure, a repetition, a migration were refused above.
   let unstable: UnstableTest[] = [];
+  let waived: ReleaseWaiver | undefined;
   if (proof.flaky.length) {
     const verdict = await judgeUnstable(ctx, repo, sha, production, proof);
     unstable = verdict.tests;
     if (verdict.blocking.length) {
-      return { ...refuse(`réussi(s) seulement après relance à ${short(sha)} : ${proof.flaky.join(', ')} (règle instable) : ${verdict.blocking.join(' ; ')}`), unstable };
+      const found = verdict.busy ? null : releaseWaiver(commonDir(repo), sha, verdict.blocking);
+      if (!found?.waiver) {
+        const how = found ? ` ; ${found.template ? `${TEMPLATE_WAIVER_NOTE} ` : ''}sans correction, seul l'opérateur publie ces tests verts à la relance, en tapant lui-même dans une session Claude Code : « ${waiverSentence('instable', sha)} »` : '';
+        return { ...refuse(`réussi(s) seulement après relance à ${short(sha)} : ${proof.flaky.join(', ')} (règle instable) : ${verdict.blocking.join(' ; ')}${how}`), unstable };
+      }
+      waived = found.waiver;
     }
   }
   const reused: Reused[] = (ctx.reused ?? []).map(r => ({ gateId: r.gateId, fromRun: r.fromRun, fromCommit: r.fromCommit, origin: r.origin }));
   const notes = [
     ...(reused.length ? [`Repris sans relancer (arbre identique, même environnement) : ${reused.map(r => `${r.gateId} de ${short(r.fromCommit)} (exécution ${r.fromRun}, reçu ${r.origin})`).join(' ; ')}.`] : []),
-    ...unstable.map(t => `Constat : test instable sans rapport avec le changement depuis ${short(production)} : ${t.test} (${t.gateId}) échoue ${t.failed} fois sur ${t.passes} passages (exécution ${t.runId}) ; publié quand même, à corriger à part.`)];
-  const said = `suite complète prouvée à ${short(sha)} (${proof.required.length} contrôle(s), ${proof.flaky.length ? `${proof.flaky.length} instable(s) sans rapport avec le changement` : 'aucun instable'}) ; ${REMOTE}/${branch} ${short(production)} vers ${short(sha)} en avance rapide`;
-  if (dryRun) return { ...base, ok: true, reused, unstable, lines: [`Mise en ligne possible : ${said}. --dry-run : rien n'est poussé.`, ...notes, ...applied] };
+    ...(waived ? [`Dérogation : ${waiverWords(waived)} ; publié malgré : ${waived.blocking.join(' ; ')}.`] : []),
+    ...unstable.map(t => t.blocking === null
+      ? `Constat : test instable sans rapport avec le changement depuis ${short(production)} : ${t.test} (${t.gateId}) échoue ${t.failed} fois sur ${t.passes} passages (exécution ${t.runId}) ; publié quand même, à corriger à part.`
+      : `Constat : test instable publié par dérogation de l'opérateur : ${t.test} (${t.gateId}) échoue ${t.failed} fois sur ${t.passes} passages (exécution ${t.runId}) ; bloquant sans elle : ${t.blocking} ; à corriger à part.`)];
+  const flakySaid = waived ? `${proof.flaky.length} instable(s) publié(s) par dérogation instable de l'opérateur` : `${proof.flaky.length} instable(s) sans rapport avec le changement`;
+  const said = `suite complète prouvée à ${short(sha)} (${proof.required.length} contrôle(s), ${proof.flaky.length ? flakySaid : 'aucun instable'}) ; ${REMOTE}/${branch} ${short(production)} vers ${short(sha)} en avance rapide`;
+  if (dryRun) return { ...base, ok: true, reused, unstable, ...(waived ? { waived } : {}), lines: [`Mise en ligne possible : ${said}. --dry-run : rien n'est poussé.`, ...notes, ...applied] };
   const push = git(repo, ['push', REMOTE, `${sha}:refs/heads/${branch}`]);
   const after = git(repo, ['ls-remote', REMOTE, `refs/heads/${branch}`]).stdout.split('\t')[0]?.trim() ?? '';
   git(repo, ['fetch', '--no-tags', REMOTE, `+refs/heads/${branch}:refs/remotes/${REMOTE}/${branch}`]);
   const done = push.status === 0 && after === sha;
-  const findings = done ? writeFindings(repo, sha, unstable) : null;
-  return { ...base, ok: done, published: done, push, reused, unstable,
+  const findings = done ? writeFindings(repo, sha, unstable, new Date(), waived ?? null) : null;
+  return { ...base, ok: done, published: done, push, reused, unstable, ...(waived ? { waived } : {}),
     lines: [done ? `Mis en ligne : ${said}. ${REMOTE}/${branch} relue à ${short(after)}.` : `Mise en ligne en échec : git push sorti en ${push.status}, ${REMOTE}/${branch} relue à ${short(after || null)}.`, ...notes, ...applied,
       ...(findings ? [`Constat non écrit dans .apv/state/suivi-constats.md : ${findings}`] : [])] };
 }
@@ -172,6 +187,7 @@ function report(io: CommandIO, asJson: boolean, outcome: Outcome, history: boole
     const failed = journalEntry(io, { event: 'release', mode, commit: outcome.sha, branch: outcome.branch, from: outcome.from, previous: outcome.previous, ok: outcome.ok, published: outcome.published,
       ...(outcome.reused?.length ? { reused: outcome.reused } : {}),
       ...(outcome.unstable?.length ? { unstable: outcome.unstable.map(t => ({ gate: t.gateId, test: t.test, files: t.files, failed: t.failed, passes: t.passes, run: t.runId, blocking: t.blocking })) } : {}),
+      ...(outcome.waived ? { waived: { rule: outcome.waived.rule, commit: outcome.waived.commit, at: outcome.waived.at, reason: outcome.waived.reason, blocking: outcome.waived.blocking } } : {}),
       detail: outcome.lines.join(' ') });
     if (failed) outcome.lines.push(`Historique non écrit (.apv/state/stack.log) : ${failed}`);
   }

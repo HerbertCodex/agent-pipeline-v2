@@ -7,6 +7,16 @@ import { Git } from '../execution/git.js';
 import { environment, expandCommand, redact, runProcess } from '../execution/process.js';
 import { RECEIPTS_DIR, sharedStore } from '../gates/store.js';
 import { sharedRunReceipts } from '../gates/reuse-proof.js';
+import { anchorKey, readOperatorMessages, templateWaiver, waiverFor } from '../rules/operator.js';
+/** The waiver of `instable` for `sha` in the journal of the Git common directory `common`; `template`: one typed with `<ta raison>`. */
+export function releaseWaiver(common, sha, blocking) {
+    const anchor = anchorKey(common);
+    const messages = readOperatorMessages(common, anchor.key);
+    const found = waiverFor(messages, 'instable', sha);
+    if (found)
+        return { waiver: { rule: 'instable', commit: sha, at: found.message.at, reason: found.reason, line: found.line, blocking: [...blocking] }, template: false };
+    return { waiver: null, template: templateWaiver(messages, 'instable', sha) };
+}
 const PATH_TOKEN = /(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+\.[A-Za-z0-9]+/g;
 /**
  * The files of `tracked` a text names: a path of the commit as written, or the only file of the commit it ends (a runner prints
@@ -108,20 +118,32 @@ export async function classifyUnstable(input) {
 const HEADING = '## Tests instables à la mise en ligne';
 /** The line of the follow-up of a finding for an unstable test unrelated to the change. */
 export const findingLine = (t, commit, date) => `- ${date}, mise en ligne de ${commit.slice(0, 12)}, test instable sans rapport avec le changement : ${t.test} (${t.gateId}, ${t.files.join(', ')}) : échoue ${t.failed} fois sur ${t.passes} passages (exécution ${t.runId}) ; publié quand même, à corriger à part.`;
+/** What the operator's waiver is said with, in the output and the follow-up: its date and reason. */
+export const waiverWords = (w) => `dérogation instable de l'opérateur (${w.at}) : ${w.reason}`;
+/** The line of the follow-up of a test (or of a check, `t` null) published only by the waiver of the operator. */
+export const waivedFindingLine = (w, date, t, why) => `- ${date}, mise en ligne de ${w.commit.slice(0, 12)}, ${t ? `test instable publié par ${waiverWords(w)} : ${t.test} (${t.gateId}${t.files.length ? `, ${t.files.join(', ')}` : ''}) : échoue ${t.failed} fois sur ${t.passes} passages (exécution ${t.runId}) ; bloquant sans elle : ${why}`
+    : `contrôle instable publié par ${waiverWords(w)} : ${why}`} ; à corriger à part.`;
+/** The waived findings: each blocking test, then each blocking reason no test carries (a check whose tests are not named). */
+export function waivedFindings(w, tests, date) {
+    const own = tests.filter(t => t.blocking !== null);
+    const said = new Set(own.map(t => `${t.gateId} : ${t.test} : ${t.blocking}`));
+    return [...own.map(t => waivedFindingLine(w, date, t, t.blocking)), ...w.blocking.filter(b => !said.has(b)).map(b => waivedFindingLine(w, date, null, b))];
+}
 /**
- * Appends the unstable tests unrelated to the change to the follow-up of the findings (`.apv/state/suivi-constats.md` of the
+ * Appends the unstable tests unrelated to the change, and those the waiver of the operator published, to the follow-up of the findings (`.apv/state/suivi-constats.md` of the
  * checkout), once per test and commit. A failure is returned, never thrown: the release stands, its journal says it.
  */
-export function writeFindings(root, commit, tests, now = new Date()) {
+export function writeFindings(root, commit, tests, now = new Date(), waiver = null) {
     const unrelated = tests.filter(t => t.blocking === null);
-    if (!unrelated.length)
+    if (!unrelated.length && !waiver)
         return null;
     try {
         const file = join(root, '.apv', 'state', 'suivi-constats.md');
         mkdirSync(join(root, '.apv', 'state'), { recursive: true });
         const before = existsSync(file) ? readFileSync(file, 'utf8') : '';
         const date = now.toISOString().slice(0, 10);
-        const fresh = unrelated.map(t => findingLine(t, commit, date)).filter(line => !before.includes(line.slice(line.indexOf(', mise en ligne'))));
+        const lines = [...unrelated.map(t => findingLine(t, commit, date)), ...(waiver ? waivedFindings(waiver, tests, date) : [])];
+        const fresh = lines.filter(line => !before.includes(line.slice(line.indexOf(', mise en ligne'))));
         if (!fresh.length)
             return null;
         // Under its own heading, written again when another section was added since.

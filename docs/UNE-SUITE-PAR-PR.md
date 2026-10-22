@@ -101,6 +101,15 @@ Restent bloquants : un test ajouté ou modifié, ou concerné par le changement 
 guéri ; toute répétition en échec ; toute migration non confirmée (`release.migrations`, AC-5) ; une preuve instable et incomplète
 (jamais relancée au même commit).
 
+### 3.1 Dérogation de l'opérateur à la mise en ligne (4.0.0-alpha.7)
+
+Ce qui bloque ci-dessus sur un contrôle **vert à la relance** (`passed_after_retry`), seul l'opérateur le lève, en tapant lui-même
+la phrase de la fusion pour le **commit exact publié** : `dérogation instable <12 premiers caractères du commit au moins> : <raison>`
+(décision du 22 octobre 2026, PR #291 du projet pilote). Lue dans le journal signé de l'opérateur, comme à la fusion (`waiverFor`) ;
+la passe suivante du cron publie sans nouveau commit. Chaque test est écrit comme constat avec la date et la raison (sortie, journal
+`stack.log` champ `waived`, suivi). Pour un autre commit, sans raison ou au gabarit : rien. Jamais un échec non guéri, une répétition
+en échec, une migration non confirmée, une preuve incomplète, ni une copie occupée.
+
 Limite : `retryFailed.testPattern` doit nommer **chaque** test en échec de la première passe ; un test qu'il ne nomme pas n'est pas
 jugé. Relire le motif avec le format du rapporteur (Playwright `list` ou `line`).
 

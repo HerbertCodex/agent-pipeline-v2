@@ -2,6 +2,11 @@
 
 ## Non publié
 
+- **4.0.0-alpha.7 : la dérogation `instable` de l'opérateur vaut aussi pour la mise en ligne ([docs/UNE-SUITE-PAR-PR.md](docs/UNE-SUITE-PAR-PR.md), 3.1 ; décision de l'opérateur du 22 octobre 2026, PR #291 du projet pilote : mise en ligne refusée sur un test instable concerné par le changement, dérogation tapée valable à la fusion seulement, production poussée à la main).**
+  - `apv release` et `apv release auto` : un contrôle vert à la relance (`passed_after_retry`) qui bloque (test concerné ou modifié, nom sans fichier, `affectedList` absent ou en échec) est publié quand l'opérateur a tapé lui-même `dérogation instable <commit> : <raison>` pour le commit exact publié (12 caractères au moins), lue dans son journal signé par le même code que la fusion (`waiverFor`, `releaseWaiver` de `src/release/unstable.ts`) ; la passe suivante du cron publie sans nouveau commit. Sortie « Dérogation : … » avec date et raison, constat par test (« bloquant sans elle »), `waived` dans `stack.log` et `--json`, ligne au suivi `.apv/state/suivi-constats.md`.
+  - Le refus donne la phrase à taper au gabarit (`<ta raison>`, jamais une dérogation collée). Restent bloquants malgré elle : autre commit, gabarit, ligne non signée, échec que la relance n'a pas guéri, répétition en échec, migration non confirmée, preuve incomplète, copie occupée.
+  - Tests : `test/release-derogation.test.mjs` (sept cas).
+
 - **4.0.0-alpha.5 : une seule suite par PR, mise en ligne sans suite redoublée ([docs/UNE-SUITE-PAR-PR.md](docs/UNE-SUITE-PAR-PR.md) ; projet pilote, 20 octobre 2026 : production restée au même commit toute la journée, quatre tests anciens instables sur six causes, 2 × 40 min de suite par PR).**
   - `apv gates run --stage full --fresh-copy` : la suite de la branche dans la copie neuve de l'arbre (`<git common dir>/apv/fresh/<arbre>`, préparée par `batch.setup`, retirée), la même que celle de `apv release auto`, au même chemin ; pile de la mise en ligne (première libre) sauf `--stacks` ; une seule copie d'un arbre à la fois ; refusée avec `--stage task`, `--allow-dirty`, `--since`.
   - `stacks[].normalizeEnv` (avec `fingerprint`) : variables propres à la pile (`E2E_STACK`, URL de `envFile`) normalisées dans l'identité de reprise, comme les ports ; refusées sans empreinte ou pour une variable qui change l'exécution (`PATH`, `NODE_OPTIONS`…).
