@@ -51,6 +51,22 @@ export const notWaivers = (rule, sha12) => [
   `dérogation ${rule} ${sha12} : test ancien sans rapport, c'est bien ça ?`,
   `dérogation ${rule} ${sha12} : l'agent propose « test ancien sans rapport »`,
   `dérogation ${rule} ${sha12} test ancien sans rapport, sans deux-points`,
+  // Second review of PR #160: a proposal pasted, then a question or a change of mind (C1 to C4).
+  `L'agent propose :\n\`\`\`\ndérogation ${rule} ${sha12} : test ancien sans rapport\n\`\`\`\nJe tape ça ?`,
+  `L'agent propose :\ndérogation ${rule} ${sha12} : test ancien sans rapport\nC'est bien ça ?`,
+  `Il dit de taper :\n    dérogation ${rule} ${sha12} : test ancien sans rapport\nPourquoi ?`,
+  `    dérogation ${rule} ${sha12} : test ancien sans rapport`,
+  `dérogation ${rule} ${sha12} : test ancien sans rapport\nNon, finalement pas de dérogation, corrige.`,
+];
+
+/** Forms of a waiver typed alone that count (second review of PR #160): tab, non-breaking spaces, CRLF, BOM, final line break. */
+export const plainWaivers = (rule, sha12, reason = 'test ancien sans rapport') => [
+  `\tdérogation ${rule} ${sha12} : ${reason}`,
+  `dérogation ${rule} ${sha12} : ${reason}`,
+  `dérogation ${rule} ${sha12} : ${reason}\r\n`,
+  `﻿dérogation ${rule} ${sha12} : ${reason}`,
+  `dérogation ${rule} ${sha12} : ${reason}\n`,
+  `   dérogation ${rule} ${sha12} : ${reason}`,
 ];
 
 const digest = data => createHash('sha256').update(data).digest('hex');

@@ -415,23 +415,64 @@ export interface JournalEntry {
   preview: string[];
   /** Lines « dérogation <règle> <commit> : <raison> », secrets masked. */
   waivers: string[];
+  /**
+   * The lines with the words of a waiver that waive nothing, and why (only when there are some): the refusal says so instead
+   * of asking for the sentence again (security review of PR #160).
+   */
+  ignored?: IgnoredWaiver[];
   sig: string;
 }
+export interface IgnoredWaiver { line: string; why: string }
 export type OperatorMessage = Omit<JournalEntry, 'sig' | 'v'>;
 
-/** The signed entry of a message the operator typed; null when it is empty. */
+/** The words of a waiver anywhere in a line: what a refusal, a question or a quote of one contains. */
+const WAIVER_WORDS = new RegExp(`d[ée]rogation\\s+[a-z]+(?::[a-z]+)?\\s+(?:pour\\s+)?[0-9a-f]{${WAIVER_SHA},64}`, 'i');
+/** A waiver line whole: « dérogation <règle> [pour] <commit> : <raison> », nothing before nor after. */
+const WAIVER_FORM = new RegExp(`${WAIVER_LINE.source}\\s*:\\s*(.+)$`, 'i');
+/** A confirmation of migration alone on its line (src/release/migrations.ts), compared without typography. */
+const MIGRATION_LINE = /^migration \S+ appliqu[ée]e[.!]?$/;
+/** What, in a line with the words of a waiver, keeps it from being one; null: a waiver line. */
+function waiverLineProblem(raw: string): string | null {
+  if (!WAIVER_LINE.test(raw)) return 'la phrase n\'ouvre pas la ligne (refus, question ou citation)';
+  // Four spaces or more: a block of code in Markdown, a proposal pasted, not a sentence typed.
+  if (((/^\s*/.exec(raw)?.[0] ?? '').match(/ /g)?.length ?? 0) >= 4) return 'ligne en retrait de 4 espaces ou plus (bloc de code)';
+  const m = WAIVER_FORM.exec(raw.normalize('NFC').trim());
+  if (!m) return 'forme non reconnue (« dérogation <règle> <commit> : <raison> » attendue, seule sur sa ligne)';
+  if (UNASSERTED_REASON.test(m[1]!)) return 'raison avec « ? » ou des guillemets';
+  return null;
+}
+/**
+ * A line kept in the journal, from the words of the waiver on (what precedes them is never kept): the rule and the commit as
+ * typed (a full commit id looks like a secret to the mask), the rest masked.
+ */
+function keptLine(raw: string): string {
+  const line = raw.trim();
+  const head = WAIVER_WORDS.exec(line)!;
+  return `${head[0]}${maskSecrets(line.slice(head.index + head[0].length))}`.slice(0, 500);
+}
+
+/**
+ * The signed entry of a message the operator typed; null when it is empty. Its waiver lines count only when **every**
+ * non-empty line of the message is a waiver line whole or a confirmation of migration (security review of PR #160: a
+ * proposal pasted in a block of code, followed by « Je tape ça ? », by « C'est bien ça ? » or by « Non, finalement pas de
+ * dérogation » waived the rule); otherwise each is kept apart, as ignored, with why.
+ */
 export function journalEntry(text: string, meta: { at: string; session: string }, key: Buffer): JournalEntry | null {
   const list = sentences(text);
   // A message of questions or quotes only is kept (its date), with no sentence that could anchor anything.
   if (!comparable(text).replace(EDGE, '')) return null;
   const preview = text.split(/\n+|(?<=[.!?…])\s+/).filter(s => VALIDATES.test(s) && !WAIVER_LINE.test(s)).map(s => maskSecrets(s.trim().split(/\s+/).slice(0, 8).join(' '))).slice(0, 10);
-  // The rule and the commit are kept as typed (a full commit id looks like a secret to the mask), the reason masked.
-  const waivers = text.split('\n').filter(l => WAIVER_LINE.test(l)).map(l => {
-    const line = l.trim();
-    const head = WAIVER_LINE.exec(line)!;
-    return `${line.slice(0, head.index + head[0].length)}${maskSecrets(line.slice(head.index + head[0].length))}`.slice(0, 500);
-  }).slice(0, 20);
-  const body = { v: 2 as const, at: meta.at, session: meta.session.slice(0, 100), sentences: [...new Set(list.map(s => keyed(key, s)))].slice(0, 200), preview, waivers };
+  const lines = text.split('\n').map(l => l.replace(/\r$/, ''));
+  const candidates = lines.filter(l => WAIVER_WORDS.test(l)).map(l => ({ line: l, problem: waiverLineProblem(l) }));
+  const others = lines.filter(l => l.trim() && !WAIVER_WORDS.test(l) && !MIGRATION_LINE.test(comparable(l)));
+  const whole = !others.length && candidates.every(c => !c.problem);
+  const waivers = whole ? candidates.map(c => keptLine(c.line)).slice(0, 20) : [];
+  // Said without the other lines: the journal never keeps what the operator typed beside a waiver.
+  const odd = candidates.find(c => c.problem);
+  const besides = others.length ? `le message contenait aussi ${others.length} autre(s) ligne(s) : une dérogation se tape seule dans son message (des confirmations de migration à part)`
+    : `le message contenait aussi une ligne de dérogation non reconnue (${odd?.problem ?? '?'})`;
+  const ignored = whole ? [] : candidates.map(c => ({ line: keptLine(c.line), why: c.problem ?? besides })).slice(0, 20);
+  const body = { v: 2 as const, at: meta.at, session: meta.session.slice(0, 100), sentences: [...new Set(list.map(s => keyed(key, s)))].slice(0, 200), preview, waivers, ...(ignored.length ? { ignored } : {}) };
   return { ...body, sig: sign(key, 'operator', JSON.stringify(body)) };
 }
 
@@ -469,7 +510,8 @@ export function readOperatorMessages(common: string, key = anchorKey(common).key
   let raw: string;
   try { raw = readFileSync(operatorJournalPath(common), 'utf8'); } catch { return []; }
   return raw.split('\n').filter(l => l.trim()).map(l => verified(l, key)).filter((e): e is JournalEntry => e !== null)
-    .map(({ at, session, sentences: list, preview, waivers }) => ({ at, session, sentences: list, preview, waivers }));
+    .map(({ at, session, sentences: list, preview, waivers, ignored }) => ({ at, session, sentences: list, preview, waivers,
+      ...(Array.isArray(ignored) ? { ignored: ignored.filter((i): i is IgnoredWaiver => typeof i?.line === 'string' && typeof i?.why === 'string') } : {}) }));
 }
 
 /**
@@ -649,6 +691,21 @@ function waiverLines(messages: readonly OperatorMessage[], rule: WaiverTarget, s
     }
   }
   return out;
+}
+
+/**
+ * Why the newest line with the words of a waiver of `rule` for `sha` waived nothing (`journalEntry`), in one line for the
+ * refusal; null when there is none. Never the line itself: the refusal pasted back must not hold a waiver line.
+ */
+export function ignoredWaiver(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): string | null {
+  const pattern = new RegExp(`d[ée]rogation\\s+${rule}\\s+(?:pour\\s+)?([0-9a-f]{${WAIVER_SHA},64})`, 'i');
+  for (const message of [...messages].reverse()) {
+    for (const i of message.ignored ?? []) {
+      const m = pattern.exec(i.line.normalize('NFC'));
+      if (m && sha.toLowerCase().startsWith(m[1]!.toLowerCase())) return `Dérogation ${rule} ignorée (message du ${message.at}) : ${i.why}.`;
+    }
+  }
+  return null;
 }
 
 /** What a refusal says when the operator quoted the template of the tool instead of a reason. */

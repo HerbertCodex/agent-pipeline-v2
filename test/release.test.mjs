@@ -450,7 +450,7 @@ test('apv release, migrations: a question or a quote never confirms, the bare se
 
 test('operator journal: a waiver typed as a question or quoted never waives; its normal form still does (review 7fe8210, medium)', () => {
   const sha = '0123456789abcdef0123456789abcdef01234567';
-  const said = text => readBack(journalEntry(`Voilà.\n${text}`, { at: new Date().toISOString(), session: 'test' }, TEST_KEY));
+  const said = text => readBack(journalEntry(text, { at: new Date().toISOString(), session: 'test' }, TEST_KEY));
   const readBack = entry => [{ at: entry.at, session: entry.session, sentences: entry.sentences, preview: entry.preview, waivers: entry.waivers }];
   assert.ok(waiverFor(said(`dérogation preuve ${sha.slice(0, 12)} : flux GitHub du test, sans objet ici`), 'preuve', sha));
   for (const text of [`dérogation preuve ${sha.slice(0, 12)} : flux GitHub du test, sans objet ici ?`, `« dérogation preuve ${sha.slice(0, 12)} : flux GitHub du test, sans objet ici »`,

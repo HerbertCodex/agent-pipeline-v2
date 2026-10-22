@@ -77,8 +77,15 @@ test('dérogation instable at the released commit: the test the change concerns 
   assert.equal((await apv(p.repo, ['release', 'auto'], ALLOW)).code, 1, 'the refusal pasted back waives nothing');
   assert.equal(p.remote('production'), before);
 
-  // The operator types it: the next pass of the cron publishes the same commit, without a new commit nor a new suite.
+  // Beside another line, the sentence waives nothing, and the refusal says why instead of only asking for it again.
   operatorSays(p.repo, `D'accord.\ndérogation instable ${sha.slice(0, 12)} : ${REASON}`);
+  const beside = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(beside.code, 1, beside.stdout + beside.stderr);
+  assert.match(beside.stdout, /Dérogation instable ignorée \(message du [^)]+\) : le message contenait aussi 1 autre\(s\) ligne\(s\) : une dérogation se tape seule dans son message/);
+  assert.equal(p.remote('production'), before);
+
+  // The operator types it alone: the next pass of the cron publishes the same commit, without a new commit nor a new suite.
+  operatorSays(p.repo, `dérogation instable ${sha.slice(0, 12)} : ${REASON}`);
   const r = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.equal(p.remote('production'), sha);
@@ -239,5 +246,17 @@ test('dérogation instable never lifts a migration not confirmed', async t => {
   const done = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(done.code, 0, done.stdout + done.stderr);
   assert.equal(p.remote('production'), sha);
+  assert.match(done.stdout, /Dérogation : dérogation instable de l'opérateur/);
+});
+
+test('review of PR #160: a waiver and a confirmation of migration in the same message both count', async t => {
+  const p = project(t, { gates: [flakyGate(tmp(t), 'tests/old.spec.ts')], files: { 'tests/old.spec.ts': 'old\n' },
+    release: { ...RELEASE, migrations: ['supabase/migrations/*.sql'] } });
+  const sha = p.change('supabase/migrations/20261022120000_ajout.sql', 'select 1;\n');
+  operatorSays(p.repo, `migration 20261022120000 appliquée\ndérogation instable ${sha.slice(0, 12)} : ${REASON}\n`);
+  const done = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(done.code, 0, done.stdout + done.stderr);
+  assert.equal(p.remote('production'), sha);
+  assert.match(done.stdout, /Migration\(s\) confirmée\(s\) appliquée\(s\) par l'opérateur : supabase\/migrations\/20261022120000_ajout\.sql/);
   assert.match(done.stdout, /Dérogation : dérogation instable de l'opérateur/);
 });

@@ -150,7 +150,7 @@ async function release(repo, state, sha, dryRun, ctx) {
             if (!found?.waiver) {
                 const how = !found ? ''
                     : found.keyProblem ? ` ; dérogation instable illisible, rien de signé n'est lu : ${found.keyProblem}`
-                        : ` ; ${found.template ? `${TEMPLATE_WAIVER_NOTE} ` : ''}sans correction, seul l'opérateur publie ces tests verts à la relance, en tapant lui-même dans une session Claude Code : « ${waiverSentence('instable', sha)} »`;
+                        : ` ; ${found.template ? `${TEMPLATE_WAIVER_NOTE} ` : ''}${found.ignored ? `${found.ignored.replace(/\.$/, '')} ; ` : ''}sans correction, seul l'opérateur publie ces tests verts à la relance, en tapant lui-même dans une session Claude Code : « ${waiverSentence('instable', sha)} »`;
                 return { ...refuse(`réussi(s) seulement après relance à ${short(sha)} : ${proof.flaky.join(', ')} (règle instable) : ${verdict.blocking.join(' ; ')}${how}`), unstable };
             }
             waived = found.waiver;

@@ -98,7 +98,10 @@ test('the operator journal hook signs what it keeps, keeps no whole message, mas
   const raw = readFileSync(journal, 'utf8');
   assert.ok(!raw.includes('hunter2') && !raw.includes(secret), 'never the whole message, never a secret');
   const line = JSON.parse(raw.trim());
-  assert.deepEqual(line.waivers, ['dérogation relecture 0123456789ab : urgence validée, clé [masqué]']);
+  // Beside other lines, the waiver line waives nothing (review of PR #160); kept apart, masked, with why, never the other lines.
+  assert.deepEqual(line.waivers, []);
+  assert.deepEqual(line.ignored.map(i => i.line), ['dérogation relecture 0123456789ab : urgence validée, clé [masqué]']);
+  assert.match(line.ignored[0].why, /le message contenait aussi 1 autre\(s\) ligne\(s\)/);
   assert.deepEqual(line.preview, ['Je valide la maquette des articles.']);
   assert.equal((statSync(keyFile).mode & 0o777), 0o400);
   const { setAnchorKeyFile, readOperatorMessages, anchoredQuote, journalState, readAnchorKey } = await import('../dist/rules/operator.js');

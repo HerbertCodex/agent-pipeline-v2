@@ -7,7 +7,7 @@ import { Git } from '../execution/git.js';
 import { environment, expandCommand, redact, runProcess } from '../execution/process.js';
 import { RECEIPTS_DIR, sharedStore } from '../gates/store.js';
 import { sharedRunReceipts } from '../gates/reuse-proof.js';
-import { anchorKey, readOperatorMessages, templateWaiver, waiverFor } from '../rules/operator.js';
+import { anchorKey, ignoredWaiver, readOperatorMessages, templateWaiver, waiverFor } from '../rules/operator.js';
 /**
  * The waiver of `instable` for `sha` in the journal of the Git common directory `common`; `template`: one typed with `<ta raison>`;
  * `keyProblem`: the anchor key is missing or refused, nothing signed is read (the refusal says so instead of asking for the
@@ -16,12 +16,12 @@ import { anchorKey, readOperatorMessages, templateWaiver, waiverFor } from '../r
 export function releaseWaiver(common, sha, blocking) {
     const anchor = anchorKey(common);
     if (!anchor.key)
-        return { waiver: null, template: false, keyProblem: anchor.problem ?? 'clé d\'ancrage absente' };
+        return { waiver: null, template: false, keyProblem: anchor.problem ?? 'clé d\'ancrage absente', ignored: null };
     const messages = readOperatorMessages(common, anchor.key);
     const found = waiverFor(messages, 'instable', sha);
     if (found)
-        return { waiver: { rule: 'instable', commit: sha, at: found.message.at, reason: found.reason, line: found.line, blocking: [...blocking] }, template: false, keyProblem: null };
-    return { waiver: null, template: templateWaiver(messages, 'instable', sha), keyProblem: null };
+        return { waiver: { rule: 'instable', commit: sha, at: found.message.at, reason: found.reason, line: found.line, blocking: [...blocking] }, template: false, keyProblem: null, ignored: null };
+    return { waiver: null, template: templateWaiver(messages, 'instable', sha), keyProblem: null, ignored: ignoredWaiver(messages, 'instable', sha) };
 }
 const PATH_TOKEN = /(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+\.[A-Za-z0-9]+/g;
 /**
