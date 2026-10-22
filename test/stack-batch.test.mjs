@@ -269,12 +269,15 @@ test('AC-REUSE-TREE: a second batch of the same pull requests on the same target
     gates: [{ id: 'suite', stage: 'full', command: [process.execPath, '-e', 'process.exit(require("fs").existsSync("BAD") ? 1 : 0)'] }],
     batch: { setup: [process.execPath, '-e', `require("fs").appendFileSync(${JSON.stringify(setups)}, "x")`] } }));
   git(p.repo, 'commit', '-qam', 'setup'); git(p.repo, 'push', '-q', 'origin', 'main');
-  const first = await p.run(['11', '12', '--target', 'main', '--json']);
+  // The merge commits of the two batches are made by the tool: their dates are fixed and different, so that two batches started in
+  // the same second still give two heads (the test compares a new head with the same tree).
+  const at = date => ({ GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
+  const first = await p.run(['11', '12', '--target', 'main', '--json'], at('2026-10-22T10:00:00+0000'));
   assert.equal(first.code, 0, first.stdout + first.stderr);
   assert.match(first.json().lots[0].proof.summary, /^1\/1 contrôle\(s\) réussi\(s\) ; apv gates verify à 0/);
   assert.equal(count(), 1, 'the copy of the first batch was prepared');
   // Same pull requests, same target: a new head (a new merge commit), the same tree.
-  const second = await p.run(['11', '12', '--target', 'main', '--json']);
+  const second = await p.run(['11', '12', '--target', 'main', '--json'], at('2026-10-22T10:00:07+0000'));
   assert.equal(second.code, 0, second.stdout + second.stderr);
   const [a, b] = [first.json().proven, second.json().proven];
   assert.notEqual(a.head, b.head);
