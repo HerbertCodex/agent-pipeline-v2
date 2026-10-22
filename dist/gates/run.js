@@ -27,7 +27,6 @@ import { classifyFailures } from './infrastructure.js';
 import { planSpread, prepareCopies, prepareMainCopy, removeCopies, stackLock, stackVariables, usesStack } from './spread.js';
 import { checkReuse, findOrigin, readLocal, reuseContext, reuseReason } from './reuse-proof.js';
 import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, repeatProofGap, resolveReference, tooManyFiles } from './repeat.js';
-import { repeatCredits } from './repeat-credit.js';
 import { planScope, scopeRecord, scopeReferenceMissing } from './proof-scope.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, withShare, flockCommand, freePorts, queuePlaces, resolveGateLock, withGateLease } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
@@ -77,9 +76,7 @@ export function reuseIdentityFor(env, extra, environmentHash, stack) {
 }
 /**
  * The variables and the extra part an identity of reuse compares on a stack (reuseIdentityFor), or null when its fingerprint
- * failed. With a fingerprint, a variable of the stack named in `normalizeEnv` (docs/UNE-SUITE-PAR-PR.md, 1.2) is replaced
- * whole by `{{<nom> de la pile}}`: `E2E_STACK=2` and `E2E_STACK=1`, two URLs of two env files, compare equal when the two
- * stacks print the same fingerprint. Any other variable of the stack keeps its value but for its declared ports (stackAddress).
+ * failed. With a fingerprint, a variable of the stack keeps its value but for its declared ports (stackAddress).
  */
 function identityOf(env, extra, stack) {
     const declaration = stack.resolved.config;
@@ -89,10 +86,8 @@ function identityOf(env, extra, stack) {
     }
     if (!stack.fingerprint)
         return null;
-    const normalized = declaration.normalizeEnv ?? [];
-    const replaced = Object.fromEntries(Object.entries(env).map(([name, value]) => [name, !stack.variables.includes(name) || value === undefined ? value : normalized.includes(name) ? `{{${name} de la pile}}` : stackAddress(name, value, stack.resolved)]));
-    return { env: replaced, extra: { ...extra, stack: { fingerprint: declaration.fingerprint, output: stack.fingerprint, variables: [...stack.variables].sort(),
-                ...(normalized.length ? { normalized: [...normalized].sort() } : {}) } } };
+    const replaced = Object.fromEntries(Object.entries(env).map(([name, value]) => [name, stack.variables.includes(name) && value !== undefined ? stackAddress(name, value, stack.resolved) : value]));
+    return { env: replaced, extra: { ...extra, stack: { fingerprint: declaration.fingerprint, output: stack.fingerprint, variables: [...stack.variables].sort() } } };
 }
 /**
  * The parts of the identity of reuse, each hashed apart (docs/UNE-SUITE-PAR-PR.md, 2.3): when no origin of an identical tree
@@ -449,16 +444,7 @@ export async function runGates(options) {
             if (!reference)
                 throw new PipelineError('GATE_BASE', referenceMissing(g.id, name, resolved.reason));
         }
-        let plan = await planRepeat(git, repo, { base: baseSha, reference }, settings);
-        // The release (`apv release auto`, docs/UNE-SUITE-PAR-PR.md, 2.2): a changed test file already repeated, green, at the same
-        // content by a complete receipt of the check (its branch) is credited, not repeated again; the receipt says which.
-        if (options.repeatCredits && reference && plan.files.length) {
-            const credits = await repeatCredits({ git, repo, commit: candidateSha, gateId: g.id, settings, files: plan.files, store: await sharedStore(git, repo), local: readLocal(repo) });
-            if (credits.size) {
-                plan = { ...plan, files: plan.files.filter(f => !credits.has(f)), fixedWaits: plan.fixedWaits.filter(w => !credits.has(w.file)), credited: [...credits.values()].sort((a, b) => a.file < b.file ? -1 : 1) };
-                log(`${g.id} : ${credits.size} test(s) modifié(s) déjà répété(s), verts, au même contenu (crédit de répétition) : non répétés : ${plan.credited.map(c => `${c.file} (exécution ${c.runId})`).join(', ')}.`);
-            }
-        }
+        const plan = await planRepeat(git, repo, { base: baseSha, reference }, settings);
         const optionLike = plan.files.find(f => f.startsWith('-'));
         if (optionLike)
             throw optionLikeFile(g.id, optionLike);
@@ -612,8 +598,7 @@ export async function runGates(options) {
                     const name = options.repeatReference ?? gate.repeatChanged.reference;
                     reference = { name, ...await resolveReference(git, repo, name) };
                 }
-                const credit = options.repeatCredits && reference ? async (files) => new Set((await repeatCredits({ git, repo, commit: candidateSha, gateId: gate.id, settings: gate.repeatChanged, files, store: ctx.store, local: ctx.local })).keys()) : undefined;
-                const gap = await repeatProofGap(git, repo, candidateSha, gate.repeatChanged, found.origin.receipt.repeat, reference, credit);
+                const gap = await repeatProofGap(git, repo, candidateSha, gate.repeatChanged, found.origin.receipt.repeat, reference);
                 if (gap) {
                     log(`${gate.id} : non repris (répétition des tests modifiés non prouvée par l'origine : ${gap.reason}) : exécuté.`);
                     continue;
@@ -1032,8 +1017,7 @@ export async function runGates(options) {
                 if (!settings || !plan)
                     return fields;
                 const times = settings.times;
-                const record = { base: plan.base, reference: plan.reference, files: plan.files, importsOnly: plan.importsOnly, movedPathsOnly: plan.movedPathsOnly, times, fixedWaits: plan.fixedWaits,
-                    ...(plan.credited?.length ? { credited: plan.credited } : {}) };
+                const record = { base: plan.base, reference: plan.reference, files: plan.files, importsOnly: plan.importsOnly, movedPathsOnly: plan.movedPathsOnly, times, fixedWaits: plan.fixedWaits };
                 if (!plan.files.length)
                     return { ...fields, repeat: { ...record, status: 'none', failures: [] } };
                 const afterRetry = fields.status === 'passed_after_retry';

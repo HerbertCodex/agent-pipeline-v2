@@ -34,11 +34,6 @@ export interface VerifyOptions {
      * `reference`, then the default branch of the remote.
      */
     reuseReference?: string | null;
-    /**
-     * The proof of a release (`apv release`, docs/UNE-SUITE-PAR-PR.md, 2.2): a changed test file a complete green receipt of the
-     * same check repeated at the same content counts as repeated (src/gates/repeat-credit.ts). Absent: every file must be.
-     */
-    repeatCredits?: boolean;
 }
 /**
  * State of one required check at the commit:

@@ -7,12 +7,10 @@ import { LockStore } from '../lock/store.js';
 import { flockFree, resolveStacks } from '../stacks/idle.js';
 
 /**
- * The fresh copy of a full suite (docs/UNE-SUITE-PAR-PR.md, 1.1): a detached worktree of the commit under the Git common
- * directory, prepared by `batch.setup` (runGates with `batchSetup`), removed at the end. The branch (`apv gates run --stage full
- * --fresh-copy`) and the release (`apv release auto`) use the same one, at the same path for the same tree
- * (`<git common dir>/apv/fresh/<tree>`): the same local state Git ignores (dependencies installed by the same setup, generated
- * files, absolute paths written there), so that the release reuses what the branch proved. One copy of a tree at a time
- * (lease `fresh-<tree>` of the lock folder of the repository).
+ * The fresh copy of the full suite of the release (docs/UNE-SUITE-PAR-PR.md): a detached worktree of the commit under the Git
+ * common directory, prepared by `batch.setup` (runGates with `batchSetup`), removed at the end, at the same path for the same
+ * tree (`<git common dir>/apv/fresh/<tree>`): a release run again at the same tree finds the same local state Git ignores and
+ * can reuse its own green receipts. One copy of a tree at a time (lease `fresh-<tree>` of the lock folder of the repository).
  */
 
 interface Run { status: number; stdout: string; stderr: string }
@@ -59,7 +57,7 @@ export async function withFreshCopy<T>(repo: string, common: string, sha: string
 /**
  * The stacks a full suite in a fresh copy is given, as `apv gates run --stacks`: those forced, else the first declared whose
  * lock is free (a lock file held by someone else is busy); none declared: none given (`ids` undefined); all busy: `busy`,
- * with the first declared stack (a suite on the branch waits for its lock, the release comes back later).
+ * with the first declared stack (the release comes back later).
  */
 export function pickStacks(config: ApvConfig, common: string, forced: string[] | undefined): { ids: string[] | undefined } | { busy: string; first: string } {
   const declared = resolveStacks(config, common);

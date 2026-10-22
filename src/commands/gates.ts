@@ -17,9 +17,6 @@ import { scopeReferenceMissing } from '../gates/proof-scope.js';
 import { Git } from '../execution/git.js';
 import { signalExitCode } from '../lock/run.js';
 import { infrastructureAdvice, infrastructureText } from '../gates/infrastructure.js';
-import { pickStacks, withFreshCopy } from '../gates/fresh-copy.js';
-import { commonDir } from '../stacks/idle.js';
-import { isInside } from '../execution/git.js';
 import { EXIT, UsageError, guard, json, list, parse, replayOf, repoPath, table } from './common.js';
 import type { CommandIO } from './io.js';
 
@@ -27,7 +24,7 @@ export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>] [--against <ref>]
                 [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
                 [--reason <texte>] [--allow-dirty] [--stacks <pile>,<pile>] [--replay <id>,<id>|all]
-                [--fresh-copy] [--repo <chemin>] [--json]
+                [--repo <chemin>] [--json]
   apv gates run --stage task --since <commit prouvé> [--only a,b] [--repo <chemin>] [--json]
   apv gates verify --commit <sha> [--stage full|task] [--base <ref>] [--against <ref>] [--offline]
                    [--config <fichier> | --commit-config] [--repo <chemin>] [--json]
@@ -332,7 +329,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
       'keep-going': { type: 'boolean' }, 'allow-dirty': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
       'commit-config': { type: 'boolean' }, against: { type: 'string' }, offline: { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
-      stacks: { type: 'string' }, since: { type: 'string' }, replay: { type: 'string' }, 'fresh-copy': { type: 'boolean' },
+      stacks: { type: 'string' }, since: { type: 'string' }, replay: { type: 'string' },
     });
     if (values.help) { io.stdout(`${usage}\n`); return EXIT.ok; }
     const [action, ...rest] = positionals;
@@ -343,7 +340,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     if (rest.length) throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
     const stage = stageOf(values.stage);
     if (action === 'verify') {
-      const extra = (['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty', 'stacks', 'since', 'replay', 'fresh-copy'] as const).filter(k => values[k] !== undefined);
+      const extra = (['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty', 'stacks', 'since', 'replay'] as const).filter(k => values[k] !== undefined);
       if (extra.length) throw new UsageError(`option de gates run seulement : --${extra.join(', --')}`);
       if (!values.commit) throw new UsageError('gates verify attend --commit <sha>');
       if (values.base !== undefined && stage !== 'task') throw new UsageError('gates verify : --base va avec --stage task (base des tests ciblés)');
@@ -384,10 +381,6 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       if (stage !== 'task') throw new UsageError('--since va avec --stage task : la preuve incrémentale des corrections ne remplace jamais la suite complète');
       if (values.base !== undefined) throw new UsageError('--since remplace --base (les tests ciblés et répétés se comptent depuis le commit prouvé) : pas les deux');
     }
-    const fresh = values['fresh-copy'] === true;
-    if (fresh && stage === 'task') throw new UsageError('--fresh-copy lance la suite complète (--stage full) dans une copie neuve, comme la mise en ligne');
-    if (fresh && values['allow-dirty']) throw new UsageError('--fresh-copy et --allow-dirty s\'excluent : la copie neuve est celle du commit, l\'arbre de travail doit être propre');
-    if (fresh && values.since !== undefined) throw new UsageError('--fresh-copy va avec la suite complète, --since avec le stage task');
     const skipProven = values['skip-proven'] === true;
     if (skipProven && (stage === 'task' || values.only !== undefined)) throw new UsageError('--skip-proven va avec la suite complète entière (--stage full, sans --only)');
     const replay = replayOf(values.replay);
@@ -440,7 +433,6 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     // A full suite: a check of stage full run in full. On a dirty tree it proves nothing: refused first, before the
     // proof lookup, the rhythm (which may journal an override in the state) and any wait.
     const full = isFullSuite(selectGates(loaded.config.gates, list(values.only)).gates, stage ?? 'full');
-    if (fresh && !full) throw new UsageError('--fresh-copy : aucun contrôle de stage full à exécuter en entier (suite complète seulement)');
     let treeChecked = false;
     const cleanTree = async (stateCheckout?: string): Promise<void> => {
       if (treeChecked || !full || allowDirty) return;
@@ -491,33 +483,15 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
         'Contrôles de tâche, tests ciblés et tests modifiés répétés depuis ce commit. La fusion exige toujours la suite complète au commit exact : une seule fois, sur le commit final.\n');
     }
     let result: Awaited<ReturnType<typeof runGates>>;
-    // --fresh-copy (docs/UNE-SUITE-PAR-PR.md, 1.1): the suite in a fresh copy of HEAD prepared by batch.setup, as the release runs
-    // it, on the stack the release would take (the first free one, unless --stacks); the receipts stay in the shared store.
-    let copied: { dir: string; stacks: readonly string[] | undefined } | null = null;
-    const gatesRun = (dir: string, stacks: readonly string[] | undefined): ReturnType<typeof runGates> =>
-      runGates({ repo: dir, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
+    try {
+      result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
         allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] || io.env['APV_PORTS_POLL_MS'] ? { hooks: {
           ...(io.env['APV_LOCK_POLL_MS'] ? { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } : {}), ...(io.env['APV_PORTS_POLL_MS'] ? { portsPollMs: Number(io.env['APV_PORTS_POLL_MS']) } : {}) } } : {}),
         ...(values.base ? { base: values.base } : {}), ...(since ? { base: since.commit, since: { commit: since.commit, head: since.head, risk: since.risk.level, reason: since.risk.reason } } : {}),
         ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
-        ...(stacks ? { stacks } : {}), ...(replay !== undefined ? { replay } : {}),
-        configFile: dir === repo || !loaded.file || !isInside(runRoot, loaded.file) ? loaded.file : join(dir, relative(runRoot, loaded.file)),
-        ...(dir === repo ? {} : { batchSetup: true }),
+        ...(spreadOver ? { stacks: spreadOver } : {}), ...(replay !== undefined ? { replay } : {}), configFile: loaded.file,
         // reuse.maxAgeMs of the base of the checks (the merge base read by applyBaseGates), never of the candidate.
         reuseReference: kept?.base.mergeBase ?? kept?.base.reference ?? null });
-    try {
-      if (fresh) {
-        const common = commonDir(runRoot);
-        let stacks: readonly string[] | undefined = spreadOver;
-        if (!stacks) {
-          const picked = pickStacks(loaded.config, common, undefined);
-          if ('busy' in picked) io.stderr(`Piles toutes tenues (${picked.busy}) : la suite prend la pile ${picked.first} et attend son verrou.\n`);
-          stacks = 'busy' in picked ? [picked.first] : picked.ids;
-        }
-        const ran = await withFreshCopy(runRoot, common, runHead!, async dir => { copied = { dir, stacks }; return gatesRun(dir, stacks); }, line => io.stderr(`${line}\n`));
-        if ('busy' in ran) { io.stderr(`Suite complète refusée, rien n'a été exécuté : ${ran.busy}. Attendre sa fin, puis relancer.\n`); return EXIT.failed; }
-        result = ran;
-      } else result = await gatesRun(repo, spreadOver);
     } catch (error) {
       if (received) { io.stderr(`Interrompu (${received}) : ${error instanceof Error ? error.message : String(error)}\n`); return signalExitCode(received); }
       throw error;
@@ -536,14 +510,12 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
         stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
         reserved: result.reserved, targeted: result.targeted, early: result.early, slowEarly: result.slowEarly, receiptsDirectory: result.directory,
         sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
-        reused: result.reused, replay: result.replay, reuseStale: result.reuseStale, reuseScan: result.reuseScan, freshCopy: copied,
+        reused: result.reused, replay: result.replay, reuseStale: result.reuseStale, reuseScan: result.reuseScan,
         suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, stacksUsed: result.stacksUsed, stacksChecked: result.stacksChecked, stacksUnmapped: result.stacksUnmapped, setup: result.setup, interruptedStacks: result.interruptedStacks, infrastructure: result.infrastructure, interrupted: received,
         rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
           level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
     } else {
-      const lines = [`${result.stage === 'task' ? 'Contrôles de tâche (--stage task)' : 'Contrôles'} à ${result.candidateSha.slice(0, 12)} (configuration : ${loaded.file ? relative(runRoot, loaded.file) || loaded.file : 'aucune'}${loaded.legacy ? ', format V2' : ''})`];
-      const copy = copied as { dir: string; stacks: readonly string[] | undefined } | null;
-      if (copy) lines.push(`Copie neuve, comme la mise en ligne : ${copy.dir} (préparée par batch.setup, retirée ; reçus dans le magasin partagé)${copy.stacks ? `, pile ${copy.stacks.join(', ')}` : ''}.`);
+      const lines = [`${result.stage === 'task' ? 'Contrôles de tâche (--stage task)' : 'Contrôles'} à ${result.candidateSha.slice(0, 12)} (configuration : ${loaded.file ? relative(result.repo, loaded.file) || loaded.file : 'aucune'}${loaded.legacy ? ', format V2' : ''})`];
       if (result.added.length) lines.push(`Dépendances ajoutées : ${result.added.join(', ')}`);
       if (result.dirty) lines.push(`Attention : modifications non commitées présentes ; les reçus décrivent plus que le commit${result.suite ? ' (--allow-dirty : ils ne prouvent rien)' : ''}.`);
       const q = result.queue;

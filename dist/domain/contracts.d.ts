@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "4.0.0-alpha.5";
+export declare const VERSION = "4.0.0-alpha.6";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
@@ -543,13 +543,6 @@ export declare const receiptSchema: import("./schema.js").Schema<{
             readonly line: number;
             readonly text: string;
         }[];
-        readonly credited: {
-            readonly file: string;
-            readonly blob: string;
-            readonly runId: string;
-            readonly receipt: string;
-            readonly commit: string;
-        }[] | undefined;
     } | undefined;
     readonly web: {
         readonly required: boolean;

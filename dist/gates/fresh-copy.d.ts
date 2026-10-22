@@ -11,7 +11,7 @@ export declare function withFreshCopy<T>(repo: string, common: string, sha: stri
 /**
  * The stacks a full suite in a fresh copy is given, as `apv gates run --stacks`: those forced, else the first declared whose
  * lock is free (a lock file held by someone else is busy); none declared: none given (`ids` undefined); all busy: `busy`,
- * with the first declared stack (a suite on the branch waits for its lock, the release comes back later).
+ * with the first declared stack (the release comes back later).
  */
 export declare function pickStacks(config: ApvConfig, common: string, forced: string[] | undefined): {
     ids: string[] | undefined;

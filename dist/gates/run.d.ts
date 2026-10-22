@@ -132,12 +132,6 @@ export interface GateRunOptions {
      * only for a package-lock.json without node_modules), and never when every check is reused (A4).
      */
     batchSetup?: boolean;
-    /**
-     * `apv release auto` (docs/UNE-SUITE-PAR-PR.md, 2.2): the changed test files a complete green receipt of the same check already
-     * repeated at the same content (on their branch) are credited instead of repeated (src/gates/repeat-credit.ts). Absent: every
-     * changed test file is repeated.
-     */
-    repeatCredits?: boolean;
 }
 /** A check reused at an identical tree: the receipt `cached` written, its origin and why. */
 export interface ReusedCheck {

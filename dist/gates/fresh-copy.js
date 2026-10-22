@@ -51,7 +51,7 @@ export async function withFreshCopy(repo, common, sha, fn, log = () => undefined
 /**
  * The stacks a full suite in a fresh copy is given, as `apv gates run --stacks`: those forced, else the first declared whose
  * lock is free (a lock file held by someone else is busy); none declared: none given (`ids` undefined); all busy: `busy`,
- * with the first declared stack (a suite on the branch waits for its lock, the release comes back later).
+ * with the first declared stack (the release comes back later).
  */
 export function pickStacks(config, common, forced) {
     const declared = resolveStacks(config, common);
