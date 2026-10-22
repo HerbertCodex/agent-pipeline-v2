@@ -79,7 +79,7 @@ export declare const MIN_WAIVER_REASON = 10;
 export type WaiverTarget = MergeRule | `relecture:${ReviewDomainName}`;
 /** One line of the journal: hashes, a few words, waiver lines; never the whole message. */
 export interface JournalEntry {
-    v: 2;
+    v: 3;
     at: string;
     session: string;
     /** HMAC (anchor key) of each comparable sentence of the message. */
